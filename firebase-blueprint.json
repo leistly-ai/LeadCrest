@@ -1,0 +1,97 @@
+{
+  "entities": {
+    "Agent": {
+      "title": "Agent Profile",
+      "description": "The real estate agent using the platform.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "name": { "type": "string", "description": "Display name" },
+        "email": { "type": "string", "description": "Contact email" },
+        "isOnboarded": { "type": "boolean", "description": "Onboarding status" },
+        "googleContactsConnected": { "type": "boolean" },
+        "googleRefreshToken": { "type": "string" },
+        "googleContacts": { "type": "array", "items": { "type": "object" } },
+        "lastSyncAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "email"]
+    },
+    "Lead": {
+      "title": "Qualified Lead",
+      "description": "A lead captured and qualified by the AI.",
+      "type": "object",
+      "properties": {
+        "agentId": { "type": "string", "description": "The ID of the agent this lead belongs to" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "salary": { "type": "string" },
+        "status": { "type": "string", "enum": ["new", "warm", "cold", "completion"] },
+        "source": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["agentId", "name", "status"]
+    },
+    "Payment": {
+      "title": "Payment Transaction",
+      "description": "A record of a subscription payment.",
+      "type": "object",
+      "properties": {
+        "agentId": { "type": "string", "description": "The ID of the agent who paid" },
+        "agentName": { "type": "string", "description": "The name of the agent" },
+        "amount": { "type": "number" },
+        "status": { "type": "string" },
+        "planId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["agentId", "amount", "status", "createdAt"]
+    },
+    "UserToken": {
+      "title": "User OAuth Token",
+      "description": "Securely stored OAuth tokens for third-party integrations.",
+      "type": "object",
+      "properties": {
+        "refreshToken": { "type": "string" },
+        "accessToken": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "scope": { "type": "string" }
+      }
+    },
+    "Contact": {
+      "title": "Google Contact",
+      "description": "A contact synced from Google People API.",
+      "type": "object",
+      "properties": {
+        "resourceName": { "type": "string" },
+        "etag": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "syncedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "firestore": {
+    "/agents/{agentId}": {
+      "schema": "Agent",
+      "description": "Agent profiles indexed by their Auth UID"
+    },
+    "/leads/{leadId}": {
+      "schema": "Lead",
+      "description": "Qualified leads captured by the system"
+    },
+    "/payments/{paymentId}": {
+      "schema": "Payment",
+      "description": "Subscription payments"
+    },
+    "/users/{userId}/tokens/{tokenId}": {
+      "schema": "UserToken",
+      "description": "Securely stored OAuth tokens for third-party integrations."
+    },
+    "/users/{userId}/contacts/{contactId}": {
+      "schema": "Contact",
+      "description": "Synced Google contacts"
+    }
+  }
+}
