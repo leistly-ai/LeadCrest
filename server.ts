@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import { GoogleGenAI } from '@google/genai';
 import { initializeApp, getApps } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
@@ -269,26 +269,25 @@ async function startServer() {
         }
       }
 
-      // 3. Send email to agent via nodemailer (if SMTP configured)
-      const smtpUser = process.env.SMTP_USER;
-      const smtpPass = process.env.SMTP_PASS;
-      const recipientEmail = agentEmail || process.env.REALTOR_EMAIL || smtpUser;
+      // 3. Send email via Resend
+      const resendKey = process.env.RESEND_API_KEY;
+      const recipientEmail = agentEmail || process.env.REALTOR_EMAIL;
+      const appUrl = process.env.APP_URL || 'http://localhost:3000';
 
-      if (smtpUser && smtpPass && recipientEmail) {
-        const transporter = nodemailer.createTransport({
-          host: process.env.SMTP_HOST || 'smtp.gmail.com',
-          port: parseInt(process.env.SMTP_PORT || '587'),
-          secure: false,
-          auth: { user: smtpUser, pass: smtpPass },
-        });
-
+      if (resendKey && recipientEmail) {
+        const resend = new Resend(resendKey);
         const signatureBase64 = signature.replace(/^data:image\/png;base64,/, '');
-        const appUrl = process.env.APP_URL || 'http://localhost:3000';
 
-        await transporter.sendMail({
-          from: `"LeadCrest" <${smtpUser}>`,
+        await resend.emails.send({
+          from: 'LeadCrest <onboarding@resend.dev>',
           to: recipientEmail,
           subject: `✍️ ${signerName} signed "${stepTitle}"`,
+          attachments: [
+            {
+              filename: 'signature.png',
+              content: Buffer.from(signatureBase64, 'base64'),
+            },
+          ],
           html: `
             <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #2d2d2d;">
               <div style="background: #1E3A5F; padding: 24px 32px; border-radius: 12px 12px 0 0;">
@@ -307,29 +306,22 @@ async function startServer() {
                     <tr><td style="color: #888; padding: 4px 0;">Signed at</td><td style="font-weight: 700;">${new Date(signedAt).toLocaleString('en-CA', { timeZone: 'America/Toronto', dateStyle: 'full', timeStyle: 'short' })}</td></tr>
                   </table>
                 </div>
-                <p style="font-size: 14px; font-weight: 700; margin: 0 0 12px;">Signature:</p>
+                <p style="font-size: 14px; font-weight: 700; margin: 0 0 12px;">Signature (also attached as PNG):</p>
                 <div style="border: 1px solid #e4e4e7; border-radius: 10px; padding: 16px; background: #fff; text-align: center; margin-bottom: 24px;">
-                  <img src="cid:signature" alt="Signature" style="max-width: 100%; max-height: 120px;" />
+                  <img src="data:image/png;base64,${signatureBase64}" alt="Signature" style="max-width: 100%; max-height: 120px;" />
                 </div>
                 <a href="${appUrl}/lead/${leadId}" style="display: inline-block; background: #D4A373; color: #fff; font-weight: 900; text-decoration: none; padding: 14px 28px; border-radius: 10px; font-size: 14px;">
                   View Lead in Dashboard →
                 </a>
-                <p style="font-size: 11px; color: #aaa; margin-top: 32px;">This notification was sent by LeadCrest. The electronic signature above is legally binding under the Electronic Commerce Act (Ontario).</p>
+                <p style="font-size: 11px; color: #aaa; margin-top: 32px;">Sent by LeadCrest. This electronic signature is legally binding under the Electronic Commerce Act (Ontario).</p>
               </div>
             </div>
           `,
-          attachments: [
-            {
-              filename: 'signature.png',
-              content: Buffer.from(signatureBase64, 'base64'),
-              cid: 'signature',
-            },
-          ],
         });
 
-        console.log(`[Sign] Email sent to ${recipientEmail}`);
+        console.log(`[Sign] Email sent via Resend to ${recipientEmail}`);
       } else {
-        console.warn('[Sign] SMTP not configured — skipping email. Set SMTP_USER, SMTP_PASS in .env');
+        console.warn('[Sign] Resend not configured or no recipient email — skipping notification.');
       }
 
       res.json({ success: true, signedAt });
