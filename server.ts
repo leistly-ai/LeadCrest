@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import nodemailer from 'nodemailer';
 import { GoogleGenAI } from '@google/genai';
 import { initializeApp, getApps } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
@@ -235,6 +236,107 @@ async function startServer() {
   // 6. API ROUTES
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
+  // ── Document Signing Endpoint ──────────────────────────────────────────
+  app.post('/api/sign-document', async (req, res) => {
+    const { leadId, stepId, agentId, signerName, signerEmail, signature, stepTitle, docLabel } = req.body;
+    if (!leadId || !stepId || !signature || !signerName) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    try {
+      if (!adminDb) throw new Error('Firebase Admin not initialized');
+
+      const signedAt = new Date().toISOString();
+
+      // 1. Save signature to Firestore under leads/{leadId}
+      const leadRef = adminDb.collection('leads').doc(leadId);
+      await leadRef.update({
+        [`signatures.${stepId}`]: { signerName, signedAt, docLabel },
+        completedSteps: FieldValue.arrayUnion(stepId),
+      });
+      console.log(`[Sign] ${signerName} signed "${stepTitle}" for lead ${leadId}`);
+
+      // 2. Get agent email for notification
+      let agentEmail: string | null = null;
+      let agentName = 'Your Agent';
+      if (agentId) {
+        const agentDoc = await adminDb.collection('agents').doc(agentId).get();
+        if (agentDoc.exists) {
+          agentEmail = agentDoc.data()?.email || null;
+          agentName = agentDoc.data()?.name || 'Your Agent';
+        }
+      }
+
+      // 3. Send email to agent via nodemailer (if SMTP configured)
+      const smtpUser = process.env.SMTP_USER;
+      const smtpPass = process.env.SMTP_PASS;
+      const recipientEmail = agentEmail || process.env.REALTOR_EMAIL || smtpUser;
+
+      if (smtpUser && smtpPass && recipientEmail) {
+        const transporter = nodemailer.createTransport({
+          host: process.env.SMTP_HOST || 'smtp.gmail.com',
+          port: parseInt(process.env.SMTP_PORT || '587'),
+          secure: false,
+          auth: { user: smtpUser, pass: smtpPass },
+        });
+
+        const signatureBase64 = signature.replace(/^data:image\/png;base64,/, '');
+        const appUrl = process.env.APP_URL || 'http://localhost:3000';
+
+        await transporter.sendMail({
+          from: `"LeadCrest" <${smtpUser}>`,
+          to: recipientEmail,
+          subject: `✍️ ${signerName} signed "${stepTitle}"`,
+          html: `
+            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #2d2d2d;">
+              <div style="background: #1E3A5F; padding: 24px 32px; border-radius: 12px 12px 0 0;">
+                <h1 style="color: #fff; margin: 0; font-size: 20px; font-weight: 900; letter-spacing: -0.5px;">LEADCREST</h1>
+                <p style="color: rgba(255,255,255,0.6); margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">Document Signed</p>
+              </div>
+              <div style="background: #fff; padding: 32px; border: 1px solid #e4e4e7; border-top: none; border-radius: 0 0 12px 12px;">
+                <p style="font-size: 16px; margin: 0 0 24px;">Hi ${agentName},</p>
+                <p style="font-size: 15px; margin: 0 0 24px;"><strong>${signerName}</strong> has signed the following document:</p>
+                <div style="background: #f9f9f9; border: 1px solid #e4e4e7; border-radius: 10px; padding: 20px; margin-bottom: 24px;">
+                  <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
+                    <tr><td style="color: #888; padding: 4px 0; width: 140px;">Document</td><td style="font-weight: 700;">${stepTitle}</td></tr>
+                    <tr><td style="color: #888; padding: 4px 0;">Form / Label</td><td style="font-weight: 700;">${docLabel}</td></tr>
+                    <tr><td style="color: #888; padding: 4px 0;">Signed by</td><td style="font-weight: 700;">${signerName}</td></tr>
+                    <tr><td style="color: #888; padding: 4px 0;">Signer email</td><td style="font-weight: 700;">${signerEmail || '—'}</td></tr>
+                    <tr><td style="color: #888; padding: 4px 0;">Signed at</td><td style="font-weight: 700;">${new Date(signedAt).toLocaleString('en-CA', { timeZone: 'America/Toronto', dateStyle: 'full', timeStyle: 'short' })}</td></tr>
+                  </table>
+                </div>
+                <p style="font-size: 14px; font-weight: 700; margin: 0 0 12px;">Signature:</p>
+                <div style="border: 1px solid #e4e4e7; border-radius: 10px; padding: 16px; background: #fff; text-align: center; margin-bottom: 24px;">
+                  <img src="cid:signature" alt="Signature" style="max-width: 100%; max-height: 120px;" />
+                </div>
+                <a href="${appUrl}/lead/${leadId}" style="display: inline-block; background: #D4A373; color: #fff; font-weight: 900; text-decoration: none; padding: 14px 28px; border-radius: 10px; font-size: 14px;">
+                  View Lead in Dashboard →
+                </a>
+                <p style="font-size: 11px; color: #aaa; margin-top: 32px;">This notification was sent by LeadCrest. The electronic signature above is legally binding under the Electronic Commerce Act (Ontario).</p>
+              </div>
+            </div>
+          `,
+          attachments: [
+            {
+              filename: 'signature.png',
+              content: Buffer.from(signatureBase64, 'base64'),
+              cid: 'signature',
+            },
+          ],
+        });
+
+        console.log(`[Sign] Email sent to ${recipientEmail}`);
+      } else {
+        console.warn('[Sign] SMTP not configured — skipping email. Set SMTP_USER, SMTP_PASS in .env');
+      }
+
+      res.json({ success: true, signedAt });
+    } catch (error: any) {
+      console.error('[Sign] Error:', error);
+      res.status(500).json({ error: error.message || 'Failed to save signature' });
+    }
   });
 
   // Save Contacts Route (Client-side sync)

@@ -34,7 +34,7 @@ export default function Navbar({ user }: { user: FirebaseUser | null }) {
     }
   };
 
-  const isChatPage = location.pathname.startsWith('/chat/');
+  const isChatPage = location.pathname.startsWith('/chat/') || location.pathname.startsWith('/sign/');
 
   if (isChatPage) {
     return (

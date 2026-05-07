@@ -18,6 +18,7 @@ import AdminDashboard from './pages/AdminDashboard';
 import AdminAgentDetails from './pages/AdminAgentDetails';
 import AdminLogin from './pages/AdminLogin';
 import CustomerChat from './pages/CustomerChat';
+import SignDocument from './pages/SignDocument';
 import Contacts from './pages/Contacts';
 import Navbar from './components/Navbar';
 import { ModalProvider } from './contexts/ModalContext';
@@ -254,6 +255,7 @@ export default function App() {
               <Route path="/license-splash" element={user ? <LicenseValidationSplash /> : <Navigate to="/login" />} />
               
               <Route path="/chat/:agentId" element={<CustomerChat />} />
+              <Route path="/sign/:leadId/:stepId" element={<SignDocument />} />
               
               <Route path="/dashboard" element={
                 <ProtectedRoute user={user} loading={loading}>
