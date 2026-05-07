@@ -64,7 +64,7 @@ export default function LeadsDashboard() {
   const stats = useMemo(() => {
     const total = leads.length;
     const warm = leads.filter(l => l.status === 'warm').length;
-    const avgScore = total ? Math.round(leads.reduce((acc, l) => acc + l.score, 0) / total) : 0;
+    const avgScore = total ? Math.round(leads.reduce((acc, l) => acc + (l.score ?? 0), 0) / total) : 0;
     
     const statusData = [
       { name: 'Warm', value: warm, color: '#D4A373' },
@@ -80,7 +80,7 @@ export default function LeadsDashboard() {
 
     const trendData = last7Days.map(date => ({
       date: date.split('-').slice(1).join('/'),
-      count: leads.filter(l => l.createdAt.startsWith(date)).length
+      count: leads.filter(l => l.createdAt?.startsWith(date)).length
     }));
 
     return { total, warm, avgScore, statusData, trendData };
