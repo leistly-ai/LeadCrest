@@ -8,7 +8,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   FileText, UserCheck, Shield, FolderOpen,
   ClipboardList, Handshake, Receipt, CheckSquare, Package,
-  CheckCircle2, ChevronDown, ChevronUp, PenLine, Send, Copy, Check
+  CheckCircle2, ChevronDown, ChevronUp, PenLine, Send, Copy, Check, Download,
 } from 'lucide-react';
 
 const STEP_ICONS: Record<string, React.ReactNode> = {
@@ -52,6 +52,7 @@ export default function TransactionPipeline({ lead, onUpdate }: TransactionPipel
 
   const completedSteps: string[] = (lead as any).completedSteps || [];
   const signatures: Record<string, any> = (lead as any).signatures || {};
+  const fintracData: Record<string, any> | null = (lead as any).fintracData || null;
 
   const handleSendEmail = async (stepId: string) => {
     const step = STEP_MAP[stepId];
@@ -194,13 +195,18 @@ export default function TransactionPipeline({ lead, onUpdate }: TransactionPipel
                       const isSending = sending === step.id;
                       const isCopied = copiedStep === step.id;
 
+                      // FINTRAC-specific state
+                      const isFintrac = step.id === 'fintrac';
+                      const idReceived = isFintrac && !!fintracData;
+
                       return (
                         <div key={step.id} className="p-4 flex items-start gap-4">
                           {/* Step icon */}
                           <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
+                            idReceived ? 'bg-sage/10 text-sage' :
                             signed ? 'bg-sage/10 text-sage' : emailSent ? 'bg-honey/10 text-honey' : `${colors.bg} ${colors.text}`
                           }`}>
-                            {signed ? <CheckCircle2 className="w-4 h-4" /> : STEP_ICONS[step.id]}
+                            {idReceived || signed ? <CheckCircle2 className="w-4 h-4" /> : STEP_ICONS[step.id]}
                           </div>
 
                           {/* Step info */}
@@ -210,22 +216,32 @@ export default function TransactionPipeline({ lead, onUpdate }: TransactionPipel
                               <span className="text-[9px] font-bold text-charcoal/40 uppercase tracking-widest border border-zinc-200 px-1.5 py-0.5 rounded">
                                 {step.docLabel}
                               </span>
-                              {signed && (
+                              {idReceived && (
+                                <span className="text-[9px] font-bold text-sage bg-sage/10 px-1.5 py-0.5 rounded uppercase tracking-widest flex items-center gap-1">
+                                  <CheckCircle2 className="w-2.5 h-2.5" /> ID Received {new Date(fintracData!.submittedAt).toLocaleDateString()}
+                                </span>
+                              )}
+                              {!idReceived && signed && (
                                 <span className="text-[9px] font-bold text-sage bg-sage/10 px-1.5 py-0.5 rounded uppercase tracking-widest flex items-center gap-1">
                                   <PenLine className="w-2.5 h-2.5" /> Signed {new Date(signatures[step.id].signedAt).toLocaleDateString()}
                                 </span>
                               )}
-                              {emailSent && !signed && (
+                              {emailSent && !signed && !idReceived && (
                                 <span className="text-[9px] font-bold text-honey bg-honey/10 px-1.5 py-0.5 rounded uppercase tracking-widest">
                                   Email Sent
                                 </span>
                               )}
                             </div>
                             <p className="text-xs text-charcoal/50 leading-relaxed">{step.description}</p>
-                            {emailSent && !signed && (
+                            {emailSent && !signed && !idReceived && (
                               <p className="text-[10px] text-charcoal/40 flex items-center gap-1">
                                 <PenLine className="w-3 h-3" />
-                                Awaiting signature from {lead.name}
+                                {isFintrac ? `Awaiting ID upload from ${lead.name}` : `Awaiting signature from ${lead.name}`}
+                              </p>
+                            )}
+                            {idReceived && fintracData?.fullName && (
+                              <p className="text-[10px] text-charcoal/40">
+                                Verified as: <span className="font-bold text-midnight">{fintracData.fullName}</span>
                               </p>
                             )}
                           </div>
@@ -234,9 +250,9 @@ export default function TransactionPipeline({ lead, onUpdate }: TransactionPipel
                           <div className="flex flex-col gap-1.5 shrink-0">
                             <button
                               onClick={() => handleSendEmail(step.id)}
-                              disabled={isSending || signed}
+                              disabled={isSending || signed || idReceived}
                               className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-bold transition-all ${
-                                signed
+                                signed || idReceived
                                   ? 'bg-sage/10 text-sage cursor-default'
                                   : emailSent
                                   ? 'bg-zinc-100 text-charcoal/50 hover:bg-zinc-200'
@@ -248,6 +264,8 @@ export default function TransactionPipeline({ lead, onUpdate }: TransactionPipel
                                   <div className="w-3 h-3 border-2 border-current/40 border-t-current rounded-full animate-spin" />
                                   Sending...
                                 </>
+                              ) : idReceived ? (
+                                <><CheckCircle2 className="w-3.5 h-3.5" /> ID Received</>
                               ) : signed ? (
                                 <><CheckCircle2 className="w-3.5 h-3.5" /> Signed</>
                               ) : emailSent ? (
@@ -256,17 +274,30 @@ export default function TransactionPipeline({ lead, onUpdate }: TransactionPipel
                                 <><Send className="w-3.5 h-3.5" /> Send Email</>
                               )}
                             </button>
-                            <button
-                              onClick={() => handleCopyLink(step.id)}
-                              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-bold transition-all border ${
-                                isCopied
-                                  ? 'bg-sage/10 text-sage border-sage/20'
-                                  : 'bg-zinc-50 text-charcoal/50 hover:bg-zinc-100 border-zinc-200'
-                              }`}
-                              title="Copy signing link"
-                            >
-                              {isCopied ? <><Check className="w-3.5 h-3.5" /> Copied!</> : <><Copy className="w-3.5 h-3.5" /> Copy Link</>}
-                            </button>
+
+                            {/* FINTRAC: show Download Form once ID received; otherwise Copy Link */}
+                            {isFintrac && idReceived ? (
+                              <a
+                                href={`/fintrac-record/${lead.id}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-bold transition-all border bg-midnight/5 text-midnight hover:bg-midnight/10 border-midnight/10"
+                              >
+                                <Download className="w-3.5 h-3.5" /> Download Form
+                              </a>
+                            ) : (
+                              <button
+                                onClick={() => handleCopyLink(step.id)}
+                                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-bold transition-all border ${
+                                  isCopied
+                                    ? 'bg-sage/10 text-sage border-sage/20'
+                                    : 'bg-zinc-50 text-charcoal/50 hover:bg-zinc-100 border-zinc-200'
+                                }`}
+                                title={isFintrac ? 'Copy ID upload link' : 'Copy signing link'}
+                              >
+                                {isCopied ? <><Check className="w-3.5 h-3.5" /> Copied!</> : <><Copy className="w-3.5 h-3.5" /> Copy Link</>}
+                              </button>
+                            )}
                           </div>
                         </div>
                       );

@@ -25,8 +25,8 @@ async function startServer() {
   console.log('[Server] Starting server in isolation mode...');
 
   // 1. BODY PARSERS (Must be BEFORE routes that use req.body)
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  app.use(express.json({ limit: '25mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
   // Initialize Firebase Admin inside startServer and wrap in try-catch
   try {
@@ -256,7 +256,10 @@ async function startServer() {
       if (!resendKey) return res.status(500).json({ error: 'Email service not configured' });
 
       const appUrl = process.env.APP_URL || 'http://localhost:3000';
-      const signingLink = `${appUrl}/sign/${leadId}/${stepId}`;
+      // FINTRAC uses a dedicated ID upload page; all other steps use the signing flow
+      const signingLink = stepId === 'fintrac'
+        ? `${appUrl}/fintrac/${leadId}`
+        : `${appUrl}/sign/${leadId}/${stepId}`;
       const firstName = leadName?.split(' ')[0] || leadName || 'there';
       const agentDisplayName = agentName || 'Your Agent';
 
@@ -280,10 +283,12 @@ async function startServer() {
                 <p style="font-size: 18px; font-weight: 900; color: #1E3A5F; margin: 0 0 4px;">${stepTitle}</p>
                 <p style="font-size: 12px; color: #888; margin: 0;">Form / Reference: <strong>${docLabel}</strong></p>
               </div>
-              <p style="font-size: 14px; color: #666; margin: 0 0 24px;">Click the button below to review the full document summary, draw your electronic signature, and confirm your signed copy. The entire process takes less than 2 minutes.</p>
+              <p style="font-size: 14px; color: #666; margin: 0 0 24px;">${stepId === 'fintrac'
+                ? 'Click the button below to securely upload a photo of your government-issued ID. This takes less than a minute and is required by federal law.'
+                : 'Click the button below to review the full document summary, draw your electronic signature, and confirm your signed copy. The entire process takes less than 2 minutes.'}</p>
               <div style="text-align: center; margin-bottom: 28px;">
                 <a href="${signingLink}" style="display: inline-block; background: #D4A373; color: #fff; font-weight: 900; text-decoration: none; padding: 16px 36px; border-radius: 10px; font-size: 15px;">
-                  Review &amp; Sign Document →
+                  ${stepId === 'fintrac' ? 'Upload ID for Verification →' : 'Review &amp; Sign Document →'}
                 </a>
               </div>
               <p style="font-size: 12px; color: #aaa; margin: 0 0 8px;">This link is secure and personalized for you. If you have any questions before signing, please contact ${agentDisplayName} directly.</p>
@@ -298,6 +303,158 @@ async function startServer() {
     } catch (error: any) {
       console.error('[Email] Error sending document email:', error);
       res.status(500).json({ error: error.message || 'Failed to send email' });
+    }
+  });
+
+  // ── FINTRAC ID Upload & Extraction ────────────────────────────────────
+  // Lead submits their government ID. Gemini Vision extracts fields.
+  // Raw ID is emailed to agent and NOT stored anywhere on the server.
+  app.post('/api/fintrac-submit', async (req, res) => {
+    const { leadId, idType, idFile, mimeType, leadEmail, leadName, agentEmail, agentName } = req.body;
+    if (!leadId || !idFile || !mimeType || !agentEmail) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    try {
+      const resendKey = process.env.RESEND_API_KEY;
+      const appUrl = process.env.APP_URL || 'http://localhost:3000';
+      const agentDisplayName = agentName || 'Your Agent';
+      const submittedAt = new Date().toISOString();
+
+      // Strip data URL prefix to get raw base64
+      const base64Image = idFile.replace(/^data:[^;]+;base64,/, '');
+      const fileBuffer = Buffer.from(base64Image, 'base64');
+      const ext = mimeType.includes('pdf') ? 'pdf' : mimeType.includes('png') ? 'png' : 'jpg';
+      const idFilename = `${(leadName || 'lead').replace(/\s+/g, '_')}_ID.${ext}`;
+
+      // ── Gemini Vision: extract ID fields ──────────────────────────────
+      let extractedData: Record<string, string> = {};
+      try {
+        const ai = getAI();
+        const result = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: [{
+            role: 'user',
+            parts: [
+              {
+                inlineData: { mimeType, data: base64Image },
+              },
+              {
+                text: `You are a data extraction assistant. Extract information from this government-issued ID document (${idType || 'ID'}).
+Return ONLY a valid JSON object with these exact keys — use empty string "" for any field not visible:
+{
+  "fullName": "full legal name exactly as printed",
+  "dateOfBirth": "YYYY-MM-DD format",
+  "address": "full address including street, city, province/state",
+  "idNumber": "document/licence/passport number",
+  "expiryDate": "YYYY-MM-DD format",
+  "jurisdiction": "province, territory, or country that issued the document",
+  "country": "country shown on document"
+}
+Return only the JSON object, no markdown, no explanation.`,
+              },
+            ],
+          }],
+        });
+
+        const raw = (result.text || '').trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+        extractedData = JSON.parse(raw);
+        console.log('[FINTRAC] Extracted data:', JSON.stringify(extractedData));
+      } catch (geminiErr: any) {
+        console.error('[FINTRAC] Gemini extraction failed:', geminiErr.message);
+        // Non-fatal — we still send the email with empty extracted fields
+      }
+
+      // ── Emails ────────────────────────────────────────────────────────
+      if (resendKey) {
+        const resend = new Resend(resendKey);
+        const submittedDateStr = new Date(submittedAt).toLocaleString('en-CA', { timeZone: 'America/Toronto', dateStyle: 'full', timeStyle: 'short' });
+        const idTypeLabel: Record<string, string> = {
+          drivers_licence: "Driver's Licence",
+          passport: 'Passport',
+          pr_card: 'Permanent Resident Card',
+          foreign_passport: 'Foreign Passport',
+        };
+        const idLabel = idTypeLabel[idType] || idType || 'Government ID';
+        const fintracRecordUrl = `${appUrl}/fintrac-record/${leadId}`;
+        const extractedRows = [
+          ['Full Name', extractedData.fullName],
+          ['Date of Birth', extractedData.dateOfBirth],
+          ['Address', extractedData.address],
+          ['ID Type', idLabel],
+          ['ID Number', extractedData.idNumber],
+          ['Expiry Date', extractedData.expiryDate],
+          ['Jurisdiction', extractedData.jurisdiction],
+        ].filter(([, v]) => v).map(([k, v]) => `
+          <tr><td style="color:#888;padding:5px 0;width:140px;">${k}</td><td style="font-weight:700;">${v}</td></tr>`).join('');
+
+        // Email 1 → Agent: ID attached, extracted data, link to FINTRAC record
+        await resend.emails.send({
+          from: 'LeadCrest <notifications@leistly.com>',
+          to: agentEmail,
+          subject: `🪪 ${leadName} submitted ID for FINTRAC verification`,
+          attachments: [{ filename: idFilename, content: fileBuffer, contentType: mimeType }],
+          html: `
+            <div style="font-family:sans-serif;max-width:600px;margin:0 auto;color:#2d2d2d;background:#f5f0eb;padding:32px 16px;">
+              <div style="background:#1E3A5F;padding:24px 32px;border-radius:12px 12px 0 0;">
+                <h1 style="color:#fff;margin:0;font-size:20px;font-weight:900;">LEADCREST</h1>
+                <p style="color:rgba(255,255,255,0.6);margin:4px 0 0;font-size:11px;text-transform:uppercase;letter-spacing:2px;">FINTRAC ID Received</p>
+              </div>
+              <div style="background:#fff;padding:32px;border:1px solid #e4e4e7;border-top:none;border-radius:0 0 12px 12px;">
+                <p style="font-size:16px;margin:0 0 8px;">Hi ${agentDisplayName},</p>
+                <p style="font-size:14px;color:#666;margin:0 0 24px;"><strong>${leadName}</strong> has submitted their ${idLabel} for FINTRAC identity verification. The original ID image is attached to this email. It has <strong>not been stored</strong> in LeadCrest.</p>
+                <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:16px;margin-bottom:24px;">
+                  <p style="font-size:13px;font-weight:700;color:#1e40af;margin:0 0 6px;">🤖 Auto-Extracted Information</p>
+                  <p style="font-size:12px;color:#1e3a8a;margin:0 0 12px;">The following fields were extracted from the ID using AI. Please verify against the attached image.</p>
+                  <table style="width:100%;font-size:13px;border-collapse:collapse;">${extractedRows || '<tr><td colspan="2" style="color:#888;">Could not extract fields automatically — please review the attached ID.</td></tr>'}</table>
+                </div>
+                <div style="background:#f9f9f9;border:1px solid #e4e4e7;border-radius:10px;padding:16px;margin-bottom:24px;">
+                  <table style="width:100%;font-size:13px;border-collapse:collapse;">
+                    <tr><td style="color:#888;padding:4px 0;width:140px;">Lead</td><td style="font-weight:700;">${leadName}</td></tr>
+                    <tr><td style="color:#888;padding:4px 0;">Email</td><td style="font-weight:700;">${leadEmail || '—'}</td></tr>
+                    <tr><td style="color:#888;padding:4px 0;">Submitted</td><td style="font-weight:700;">${submittedDateStr} (Toronto)</td></tr>
+                  </table>
+                </div>
+                <a href="${fintracRecordUrl}" style="display:inline-block;background:#D4A373;color:#fff;font-weight:900;text-decoration:none;padding:14px 28px;border-radius:10px;font-size:14px;">
+                  View &amp; Download FINTRAC Record →
+                </a>
+                <p style="font-size:11px;color:#ccc;margin-top:28px;">Sent by LeadCrest · Original ID attached · Not stored in application.</p>
+              </div>
+            </div>`,
+        });
+
+        // Email 2 → Lead: confirmation only, no ID attachment
+        if (leadEmail) {
+          await resend.emails.send({
+            from: 'LeadCrest <notifications@leistly.com>',
+            to: leadEmail,
+            subject: 'Your ID has been received — FINTRAC Verification',
+            html: `
+              <div style="font-family:sans-serif;max-width:600px;margin:0 auto;color:#2d2d2d;background:#f5f0eb;padding:32px 16px;">
+                <div style="background:#1E3A5F;padding:24px 32px;border-radius:12px 12px 0 0;">
+                  <h1 style="color:#fff;margin:0;font-size:20px;font-weight:900;">LEADCREST</h1>
+                  <p style="color:rgba(255,255,255,0.6);margin:4px 0 0;font-size:11px;text-transform:uppercase;letter-spacing:2px;">FINTRAC Verification Confirmation</p>
+                </div>
+                <div style="background:#fff;padding:32px;border:1px solid #e4e4e7;border-top:none;border-radius:0 0 12px 12px;">
+                  <p style="font-size:16px;margin:0 0 8px;">Hi ${(leadName || '').split(' ')[0] || 'there'},</p>
+                  <p style="font-size:14px;color:#666;margin:0 0 24px;">Thank you — your ${idLabel} has been securely forwarded to your real estate agent for FINTRAC identity verification. No further action is required from you at this time.</p>
+                  <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px;margin-bottom:24px;">
+                    <p style="font-size:13px;font-weight:700;color:#166534;margin:0 0 4px;">✅ Verification Submitted</p>
+                    <p style="font-size:12px;color:#166534;margin:0;">Your ID was submitted on ${submittedDateStr} (Toronto time). Your agent will complete the FINTRAC record and may follow up if additional information is needed.</p>
+                  </div>
+                  <p style="font-size:11px;color:#ccc;margin-top:16px;">Sent by LeadCrest · Your ID was not stored in this application · Keep this email for your records.</p>
+                </div>
+              </div>`,
+          });
+        }
+
+        console.log(`[FINTRAC] ID received — agent: ${agentEmail}, lead: ${leadEmail}`);
+      }
+
+      res.json({ success: true, extractedData, submittedAt });
+    } catch (error: any) {
+      console.error('[FINTRAC] Error:', error);
+      res.status(500).json({ error: error.message || 'Failed to process submission' });
     }
   });
 

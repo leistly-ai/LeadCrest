@@ -19,6 +19,8 @@ import AdminAgentDetails from './pages/AdminAgentDetails';
 import AdminLogin from './pages/AdminLogin';
 import CustomerChat from './pages/CustomerChat';
 import SignDocument from './pages/SignDocument';
+import FintracUpload from './pages/FintracUpload';
+import FintracRecord from './pages/FintracRecord';
 import Contacts from './pages/Contacts';
 import Navbar from './components/Navbar';
 import { ModalProvider } from './contexts/ModalContext';
@@ -256,6 +258,8 @@ export default function App() {
               
               <Route path="/chat/:agentId" element={<CustomerChat />} />
               <Route path="/sign/:leadId/:stepId" element={<SignDocument />} />
+              <Route path="/fintrac/:leadId" element={<FintracUpload />} />
+              <Route path="/fintrac-record/:leadId" element={<FintracRecord />} />
               
               <Route path="/dashboard" element={
                 <ProtectedRoute user={user} loading={loading}>
