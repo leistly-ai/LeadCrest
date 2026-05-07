@@ -238,6 +238,84 @@ async function startServer() {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
+  // ── Send Document Email to Lead ────────────────────────────────────────
+  app.post('/api/send-document-email', async (req, res) => {
+    const { leadId, stepId, agentId, stepTitle, docLabel, stepPhase } = req.body;
+    if (!leadId || !stepId || !agentId || !stepTitle) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    try {
+      if (!adminDb) throw new Error('Firebase Admin not initialized');
+
+      const [leadDoc, agentDoc] = await Promise.all([
+        adminDb.collection('leads').doc(leadId).get(),
+        adminDb.collection('agents').doc(agentId).get(),
+      ]);
+
+      if (!leadDoc.exists) return res.status(404).json({ error: 'Lead not found' });
+
+      const lead = leadDoc.data();
+      const agent = agentDoc.exists ? agentDoc.data() : null;
+      const leadEmail = lead.email;
+      const leadName = lead.name?.split(' ')[0] || lead.name || 'there';
+      const agentName = agent?.name || 'Your Agent';
+      const agentEmail = agent?.email;
+
+      if (!leadEmail) return res.status(400).json({ error: 'Lead has no email address' });
+
+      const resendKey = process.env.RESEND_API_KEY;
+      if (!resendKey) return res.status(500).json({ error: 'Email service not configured' });
+
+      const appUrl = process.env.APP_URL || 'http://localhost:3000';
+      const signingLink = `${appUrl}/sign/${leadId}/${stepId}`;
+
+      const resend = new Resend(resendKey);
+      await resend.emails.send({
+        from: 'LeadCrest <notifications@leistly.com>',
+        to: leadEmail,
+        cc: agentEmail ? [agentEmail] : undefined,
+        subject: `Action Required: Please review and sign "${stepTitle}"`,
+        html: `
+          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #2d2d2d; background: #f5f0eb; padding: 32px 16px;">
+            <div style="background: #1E3A5F; padding: 24px 32px; border-radius: 12px 12px 0 0;">
+              <h1 style="color: #fff; margin: 0; font-size: 20px; font-weight: 900; letter-spacing: -0.5px;">LEADCREST</h1>
+              <p style="color: rgba(255,255,255,0.6); margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">Secure Document Signing</p>
+            </div>
+            <div style="background: #fff; padding: 32px; border: 1px solid #e4e4e7; border-top: none; border-radius: 0 0 12px 12px;">
+              <p style="font-size: 16px; margin: 0 0 8px;">Hi ${leadName},</p>
+              <p style="font-size: 14px; color: #666; margin: 0 0 24px;">${agentName} has sent you a document to review and sign as part of your real estate transaction.</p>
+              <div style="background: #f9f9f9; border: 1px solid #e4e4e7; border-radius: 10px; padding: 20px; margin-bottom: 28px;">
+                <p style="font-size: 11px; color: #D4A373; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; margin: 0 0 6px;">${stepPhase || 'Transaction Document'}</p>
+                <p style="font-size: 18px; font-weight: 900; color: #1E3A5F; margin: 0 0 4px;">${stepTitle}</p>
+                <p style="font-size: 12px; color: #888; margin: 0;">Form / Reference: <strong>${docLabel}</strong></p>
+              </div>
+              <p style="font-size: 14px; color: #666; margin: 0 0 24px;">Click the button below to review the full document summary, draw your electronic signature, and confirm your signed copy. The entire process takes less than 2 minutes.</p>
+              <div style="text-align: center; margin-bottom: 28px;">
+                <a href="${signingLink}" style="display: inline-block; background: #D4A373; color: #fff; font-weight: 900; text-decoration: none; padding: 16px 36px; border-radius: 10px; font-size: 15px;">
+                  Review &amp; Sign Document →
+                </a>
+              </div>
+              <p style="font-size: 12px; color: #aaa; margin: 0 0 8px;">This link is secure and personalized for you. If you have any questions before signing, please contact ${agentName} directly.</p>
+              <p style="font-size: 11px; color: #ccc; margin: 0;">Electronic signatures are legally binding under the Electronic Commerce Act (Ontario).</p>
+            </div>
+          </div>
+        `,
+      });
+
+      // Mark step as email-sent in Firestore
+      await adminDb.collection('leads').doc(leadId).update({
+        completedSteps: FieldValue.arrayUnion(stepId),
+      });
+
+      console.log(`[Email] Document email sent to ${leadEmail} (CC: ${agentEmail}) for step ${stepId}`);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('[Email] Error sending document email:', error);
+      res.status(500).json({ error: error.message || 'Failed to send email' });
+    }
+  });
+
   // ── Document Signing Endpoint ──────────────────────────────────────────
   app.post('/api/sign-document', async (req, res) => {
     const { leadId, stepId, agentId, signerName, signerEmail, signature, stepTitle, docLabel } = req.body;
@@ -250,7 +328,7 @@ async function startServer() {
 
       const signedAt = new Date().toISOString();
 
-      // 1. Save signature to Firestore under leads/{leadId}
+      // 1. Save signature to Firestore
       const leadRef = adminDb.collection('leads').doc(leadId);
       await leadRef.update({
         [`signatures.${stepId}`]: { signerName, signedAt, docLabel },
@@ -269,57 +347,63 @@ async function startServer() {
         }
       }
 
-      // 3. Send email via Resend
+      // 3. Send signed-document email: TO agent, CC lead
       const resendKey = process.env.RESEND_API_KEY;
-      const recipientEmail = agentEmail || process.env.REALTOR_EMAIL;
       const appUrl = process.env.APP_URL || 'http://localhost:3000';
+      const recipientEmail = agentEmail || process.env.REALTOR_EMAIL;
 
       if (resendKey && recipientEmail) {
         const resend = new Resend(resendKey);
         const signatureBase64 = signature.replace(/^data:image\/png;base64,/, '');
+        const signedDateStr = new Date(signedAt).toLocaleString('en-CA', { timeZone: 'America/Toronto', dateStyle: 'full', timeStyle: 'short' });
 
         await resend.emails.send({
           from: 'LeadCrest <notifications@leistly.com>',
           to: recipientEmail,
+          cc: signerEmail ? [signerEmail] : undefined,
           subject: `✍️ ${signerName} signed "${stepTitle}"`,
           attachments: [
             {
-              filename: 'signature.png',
+              filename: `${docLabel.replace(/\s+/g, '_')}_signed.png`,
               content: Buffer.from(signatureBase64, 'base64'),
             },
           ],
           html: `
-            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #2d2d2d;">
+            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #2d2d2d; background: #f5f0eb; padding: 32px 16px;">
               <div style="background: #1E3A5F; padding: 24px 32px; border-radius: 12px 12px 0 0;">
                 <h1 style="color: #fff; margin: 0; font-size: 20px; font-weight: 900; letter-spacing: -0.5px;">LEADCREST</h1>
                 <p style="color: rgba(255,255,255,0.6); margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">Document Signed</p>
               </div>
               <div style="background: #fff; padding: 32px; border: 1px solid #e4e4e7; border-top: none; border-radius: 0 0 12px 12px;">
-                <p style="font-size: 16px; margin: 0 0 24px;">Hi ${agentName},</p>
-                <p style="font-size: 15px; margin: 0 0 24px;"><strong>${signerName}</strong> has signed the following document:</p>
+                <p style="font-size: 16px; margin: 0 0 8px;">Hi ${agentName},</p>
+                <p style="font-size: 14px; color: #666; margin: 0 0 24px;"><strong>${signerName}</strong> has reviewed and signed the following document. A copy has also been sent to them.</p>
+
                 <div style="background: #f9f9f9; border: 1px solid #e4e4e7; border-radius: 10px; padding: 20px; margin-bottom: 24px;">
                   <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
-                    <tr><td style="color: #888; padding: 4px 0; width: 140px;">Document</td><td style="font-weight: 700;">${stepTitle}</td></tr>
-                    <tr><td style="color: #888; padding: 4px 0;">Form / Label</td><td style="font-weight: 700;">${docLabel}</td></tr>
-                    <tr><td style="color: #888; padding: 4px 0;">Signed by</td><td style="font-weight: 700;">${signerName}</td></tr>
-                    <tr><td style="color: #888; padding: 4px 0;">Signer email</td><td style="font-weight: 700;">${signerEmail || '—'}</td></tr>
-                    <tr><td style="color: #888; padding: 4px 0;">Signed at</td><td style="font-weight: 700;">${new Date(signedAt).toLocaleString('en-CA', { timeZone: 'America/Toronto', dateStyle: 'full', timeStyle: 'short' })}</td></tr>
+                    <tr><td style="color: #888; padding: 5px 0; width: 140px;">Document</td><td style="font-weight: 700;">${stepTitle}</td></tr>
+                    <tr><td style="color: #888; padding: 5px 0;">Form / Label</td><td style="font-weight: 700;">${docLabel}</td></tr>
+                    <tr><td style="color: #888; padding: 5px 0;">Signed by</td><td style="font-weight: 700;">${signerName}</td></tr>
+                    <tr><td style="color: #888; padding: 5px 0;">Signer email</td><td style="font-weight: 700;">${signerEmail || '—'}</td></tr>
+                    <tr><td style="color: #888; padding: 5px 0;">Signed at</td><td style="font-weight: 700;">${signedDateStr} (Toronto)</td></tr>
                   </table>
                 </div>
-                <p style="font-size: 14px; font-weight: 700; margin: 0 0 12px;">Signature (also attached as PNG):</p>
-                <div style="border: 1px solid #e4e4e7; border-radius: 10px; padding: 16px; background: #fff; text-align: center; margin-bottom: 24px;">
-                  <img src="data:image/png;base64,${signatureBase64}" alt="Signature" style="max-width: 100%; max-height: 120px;" />
+
+                <p style="font-size: 14px; font-weight: 700; margin: 0 0 12px;">Electronic Signature:</p>
+                <div style="border: 2px solid #e4e4e7; border-radius: 10px; padding: 20px; background: #fafafa; text-align: center; margin-bottom: 8px;">
+                  <img src="data:image/png;base64,${signatureBase64}" alt="Signature of ${signerName}" style="max-width: 100%; max-height: 120px;" />
                 </div>
+                <p style="font-size: 11px; color: #aaa; margin: 0 0 28px; text-align: center;">Signature of ${signerName} — ${signedDateStr}</p>
+
                 <a href="${appUrl}/lead/${leadId}" style="display: inline-block; background: #D4A373; color: #fff; font-weight: 900; text-decoration: none; padding: 14px 28px; border-radius: 10px; font-size: 14px;">
                   View Lead in Dashboard →
                 </a>
-                <p style="font-size: 11px; color: #aaa; margin-top: 32px;">Sent by LeadCrest. This electronic signature is legally binding under the Electronic Commerce Act (Ontario).</p>
+                <p style="font-size: 11px; color: #ccc; margin-top: 32px;">Sent by LeadCrest · Electronic Commerce Act (Ontario) · Signature PNG also attached.</p>
               </div>
             </div>
           `,
         });
 
-        console.log(`[Sign] Email sent via Resend to ${recipientEmail}`);
+        console.log(`[Sign] Notification sent to ${recipientEmail}, CC: ${signerEmail}`);
       } else {
         console.warn('[Sign] Resend not configured or no recipient email — skipping notification.');
       }

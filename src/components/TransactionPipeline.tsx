@@ -1,13 +1,11 @@
 import { useState } from 'react';
-import { doc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase';
 import { Lead } from '../types';
 import { PIPELINE_STEPS, STEP_MAP } from '../data/pipelineSteps';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  FileText, UserCheck, Shield, Landmark, FolderOpen,
+  FileText, UserCheck, Shield, FolderOpen,
   ClipboardList, Handshake, Receipt, CheckSquare, Package,
-  Mail, CheckCircle2, ChevronDown, ChevronUp, PenLine
+  CheckCircle2, ChevronDown, ChevronUp, PenLine, Send, Copy, Check
 } from 'lucide-react';
 
 const STEP_ICONS: Record<string, React.ReactNode> = {
@@ -37,30 +35,6 @@ const PHASE_COLORS: Record<string, { bg: string; border: string; text: string; b
   'Phase 4 · Lawyer Package':    { bg: 'bg-zinc-50',    border: 'border-zinc-200',    text: 'text-zinc-700', badge: 'bg-zinc-100 text-zinc-700' },
 };
 
-// Email bodies per step — plain text for mailto
-const emailBody = (lead: Lead, stepId: string, signingLink: string): string => {
-  const step = STEP_MAP[stepId];
-  const firstName = lead.name.split(' ')[0];
-  const summaryShort = step.documentSummary.split('\n').slice(0, 4).join('\n');
-
-  return `Hi ${firstName},
-
-${summaryShort}
-
-──────────────────────────────
-✍️  SIGN THIS DOCUMENT ONLINE
-──────────────────────────────
-Please click the secure link below to review the full document summary and add your electronic signature:
-
-${signingLink}
-
-This link is unique to you. Once you sign, a copy will be automatically sent to me for my records.
-
-If you have any questions before signing, please don't hesitate to call or reply to this email.
-
-Best regards`;
-};
-
 interface TransactionPipelineProps {
   lead: Lead;
   onUpdate: (updated: Lead) => void;
@@ -69,28 +43,51 @@ interface TransactionPipelineProps {
 export default function TransactionPipeline({ lead, onUpdate }: TransactionPipelineProps) {
   const [expandedPhase, setExpandedPhase] = useState<string | null>(PHASE_ORDER[0]);
   const [sending, setSending] = useState<string | null>(null);
+  const [sentSteps, setSentSteps] = useState<Set<string>>(new Set());
+  const [copiedStep, setCopiedStep] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   const completedSteps: string[] = (lead as any).completedSteps || [];
   const signatures: Record<string, any> = (lead as any).signatures || {};
 
-  const markEmailSent = async (stepId: string) => {
-    if (completedSteps.includes(stepId)) return;
-    const updated = [...completedSteps, stepId];
-    await updateDoc(doc(db, 'leads', lead.id), { completedSteps: updated });
-    onUpdate({ ...lead, ...({ completedSteps: updated } as any) });
+  const handleSendEmail = async (stepId: string) => {
+    const step = STEP_MAP[stepId];
+    setSending(stepId);
+    setSendError(null);
+
+    try {
+      const res = await fetch('/api/send-document-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          leadId: lead.id,
+          stepId,
+          agentId: (lead as any).agentId,
+          stepTitle: step.title,
+          docLabel: step.docLabel,
+          stepPhase: step.phase,
+        }),
+      });
+
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Failed to send email');
+      }
+
+      setSentSteps(prev => new Set(prev).add(stepId));
+      onUpdate({ ...lead, ...({ completedSteps: [...completedSteps, stepId] } as any) });
+    } catch (err: any) {
+      setSendError(err.message || 'Failed to send email');
+    } finally {
+      setSending(null);
+    }
   };
 
-  const handleSendEmail = async (stepId: string) => {
-    setSending(stepId);
-    const step = STEP_MAP[stepId];
-    const signingLink = `${window.location.origin}/sign/${lead.id}/${stepId}`;
-    const subject = encodeURIComponent(`Action Required: ${step.title} — ${lead.name}`);
-    const body = encodeURIComponent(emailBody(lead, stepId, signingLink));
-    window.location.href = `mailto:${lead.email}?subject=${subject}&body=${body}`;
-    setTimeout(async () => {
-      await markEmailSent(stepId);
-      setSending(null);
-    }, 1500);
+  const handleCopyLink = (stepId: string) => {
+    const link = `${window.location.origin}/sign/${lead.id}/${stepId}`;
+    navigator.clipboard.writeText(link);
+    setCopiedStep(stepId);
+    setTimeout(() => setCopiedStep(null), 2000);
   };
 
   const stepsByPhase = PHASE_ORDER.reduce<Record<string, typeof PIPELINE_STEPS>>((acc, phase) => {
@@ -126,6 +123,20 @@ export default function TransactionPipeline({ lead, onUpdate }: TransactionPipel
         </div>
         <p className="text-[10px] text-charcoal/40 font-bold uppercase tracking-widest text-right">{progressPct}% complete</p>
       </div>
+
+      {/* Send error toast */}
+      <AnimatePresence>
+        {sendError && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-600 font-medium"
+          >
+            {sendError}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Phases */}
       {PHASE_ORDER.map((phase) => {
@@ -166,9 +177,10 @@ export default function TransactionPipeline({ lead, onUpdate }: TransactionPipel
                 >
                   <div className="divide-y divide-zinc-100">
                     {stepsByPhase[phase].map((step) => {
-                      const emailSent = completedSteps.includes(step.id);
+                      const emailSent = completedSteps.includes(step.id) || sentSteps.has(step.id);
                       const signed = !!signatures[step.id];
                       const isSending = sending === step.id;
+                      const isCopied = copiedStep === step.id;
 
                       return (
                         <div key={step.id} className="p-4 flex items-start gap-4">
@@ -210,27 +222,38 @@ export default function TransactionPipeline({ lead, onUpdate }: TransactionPipel
                           <div className="flex flex-col gap-1.5 shrink-0">
                             <button
                               onClick={() => handleSendEmail(step.id)}
-                              disabled={isSending}
+                              disabled={isSending || signed}
                               className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-bold transition-all ${
-                                emailSent
+                                signed
+                                  ? 'bg-sage/10 text-sage cursor-default'
+                                  : emailSent
                                   ? 'bg-zinc-100 text-charcoal/50 hover:bg-zinc-200'
                                   : 'bg-honey text-white hover:bg-honey/90 shadow-sm'
                               } disabled:opacity-50`}
                             >
-                              <Mail className="w-3.5 h-3.5" />
-                              {isSending ? 'Opening...' : emailSent ? 'Resend' : 'Send Email'}
+                              {isSending ? (
+                                <>
+                                  <div className="w-3 h-3 border-2 border-current/40 border-t-current rounded-full animate-spin" />
+                                  Sending...
+                                </>
+                              ) : signed ? (
+                                <><CheckCircle2 className="w-3.5 h-3.5" /> Signed</>
+                              ) : emailSent ? (
+                                <><Send className="w-3.5 h-3.5" /> Resend</>
+                              ) : (
+                                <><Send className="w-3.5 h-3.5" /> Send Email</>
+                              )}
                             </button>
-                            {/* Copy signing link */}
                             <button
-                              onClick={() => {
-                                const link = `${window.location.origin}/sign/${lead.id}/${step.id}`;
-                                navigator.clipboard.writeText(link);
-                              }}
-                              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-bold bg-zinc-50 text-charcoal/50 hover:bg-zinc-100 transition-all border border-zinc-200"
+                              onClick={() => handleCopyLink(step.id)}
+                              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-bold transition-all border ${
+                                isCopied
+                                  ? 'bg-sage/10 text-sage border-sage/20'
+                                  : 'bg-zinc-50 text-charcoal/50 hover:bg-zinc-100 border-zinc-200'
+                              }`}
                               title="Copy signing link"
                             >
-                              <PenLine className="w-3.5 h-3.5" />
-                              Copy Link
+                              {isCopied ? <><Check className="w-3.5 h-3.5" /> Copied!</> : <><Copy className="w-3.5 h-3.5" /> Copy Link</>}
                             </button>
                           </div>
                         </div>
