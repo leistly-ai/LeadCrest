@@ -24,7 +24,7 @@ export interface Agent {
   createdAt: string;
 }
 
-export type LeadStatus = 'cold' | 'warm' | 'completion';
+export type LeadStatus = 'cold' | 'warm' | 'hot' | 'completion';
 export type LeadType = 'buy' | 'rent';
 
 export interface Lead {
@@ -35,17 +35,25 @@ export interface Lead {
   phone: string;
   currentAddress: string;
   type: LeadType;
+  // Scoring fields
+  timeline: string;           // "asap" | "1-3 months" | "3-12 months" | "just looking"
+  budget: string;             // e.g. "$400k-$600k"
+  preApproved: string;        // "yes" | "pre-qualified" | "no" | "unknown"
+  downPaymentReady: string;   // "yes 20%+" | "yes <20%" | "financing" | "no"
+  locationPreference: string; // specific area or neighbourhood
+  motivation: string;         // "relocating" | "upgrading" | "investment" | "exploring"
   score: number;
   status: LeadStatus;
-  softCreditCheck?: {
-    rating: string;
-    defaults: boolean;
-    source: string;
-  };
+  source?: string;
   employmentInfo?: {
     company: string;
     salary: string;
     validated: boolean;
+  };
+  softCreditCheck?: {
+    rating: string;
+    defaults: boolean;
+    source: string;
   };
   documents?: string[];
   createdAt: string;

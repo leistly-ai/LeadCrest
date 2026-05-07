@@ -9,7 +9,7 @@ interface Message {
   timestamp: Date;
 }
 
-export const WhatsAppSimulator = ({ isOpen, onClose, agentName = "LeadCrest Assistant" }: { isOpen: boolean, onClose: () => void, agentName?: string }) => {
+export const WhatsAppSimulator = ({ isOpen, onClose, agentName = "LeadCrest Assistant", agentId }: { isOpen: boolean, onClose: () => void, agentName?: string, agentId?: string }) => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -20,6 +20,7 @@ export const WhatsAppSimulator = ({ isOpen, onClose, agentName = "LeadCrest Assi
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [leadCaptured, setLeadCaptured] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -46,9 +47,9 @@ export const WhatsAppSimulator = ({ isOpen, onClose, agentName = "LeadCrest Assi
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           message: input,
-          from: 'simulated-user',
+          agentId: agentId || null,
           history: messages.map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
             parts: [{ text: m.text }]
@@ -57,7 +58,9 @@ export const WhatsAppSimulator = ({ isOpen, onClose, agentName = "LeadCrest Assi
       });
 
       const data = await response.json();
-      
+
+      if (data.leadCaptured) setLeadCaptured(true);
+
       const botMsg: Message = {
         id: (Date.now() + 1).toString(),
         text: data.reply || "I'm processing your request...",
@@ -133,6 +136,13 @@ export const WhatsAppSimulator = ({ isOpen, onClose, agentName = "LeadCrest Assi
                 </div>
               )}
             </div>
+
+            {/* Lead captured banner */}
+            {leadCaptured && (
+              <div className="px-4 py-2 bg-[#25D366]/10 border-t border-[#25D366]/20 text-center text-xs font-bold text-[#075E54]">
+                ✓ Lead captured and saved to your dashboard
+              </div>
+            )}
 
             {/* Input */}
             <div className="p-3 bg-[#F0F0F0] flex items-center gap-2">

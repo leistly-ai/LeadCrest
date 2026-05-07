@@ -304,8 +304,8 @@ async function startServer() {
   });
 
   app.post('/api/chat', async (req, res) => {
-    const { message, from, history } = req.body;
-    console.log(`[Simulator Chat] From: ${from}`);
+    const { message, agentId, history } = req.body;
+    console.log(`[Simulator Chat] agentId: ${agentId}`);
 
     try {
       const { db } = await import('./src/firebase');
@@ -313,12 +313,27 @@ async function startServer() {
 
       const ai = getAI();
 
-      const systemPrompt = "You are a professional real estate assistant. Qualify this lead by asking ONE question at a time in this order: Full Name, Email, Phone Number, Current Address, Buying or Renting, Employer, Annual Salary. Once you have all answers, thank them and output exactly: [QUALIFIED: {\"name\":\"...\",\"email\":\"...\",\"phone\":\"...\",\"address\":\"...\",\"type\":\"buy or rent\",\"employer\":\"...\",\"salary\":\"...\"}]";
+      const systemPrompt = `You are a friendly, professional real estate AI assistant. Qualify this lead by asking ONE question at a time in this exact order:
+1. Full name
+2. Email address
+3. Phone number
+4. Current home address
+5. Are they looking to Buy or Rent?
+6. What is their timeline? (options: ASAP, 1-3 months, 3-6 months, 6-12 months, Just exploring)
+7. What is their budget or price range?
+8. Have they been pre-approved for a mortgage? (options: Yes, In process, Not yet) — skip this for renters, ask about monthly budget instead
+9. Do they have a down payment ready? (options: Yes 20%+, Yes less than 20%, Financing entirely, Not yet) — skip for renters
+10. Which neighbourhood or area are they interested in?
+11. What is their motivation for moving? (options: Relocating/job change, Upgrading/downsizing, Investment, Just exploring)
+12. Who is their current employer?
+13. What is their approximate annual salary or household income?
 
-      // Filter out any system-role messages from history — Gemini only accepts user/model
+Rules:
+- Ask ONLY ONE question at a time, keep responses short and friendly
+- Once you have all 13 answers, thank them warmly and output EXACTLY this tag (no extra text after):
+[QUALIFIED: {"name":"...","email":"...","phone":"...","currentAddress":"...","type":"buy or rent","timeline":"...","budget":"...","preApproved":"...","downPaymentReady":"...","locationPreference":"...","motivation":"...","employer":"...","salary":"..."}]`;
+
       const contents = (history || []).filter((m: any) => m.role === 'user' || m.role === 'model');
-
-      // Append the latest user message
       contents.push({ role: 'user', parts: [{ text: message }] });
 
       const result = await generateWithFallback(ai, {
@@ -327,29 +342,59 @@ async function startServer() {
       });
 
       let aiText = result.text || "I'm here to help!";
+      let leadCaptured = false;
 
       if (aiText.includes('[QUALIFIED:')) {
-        const match = aiText.match(/\[QUALIFIED:\s*({.*?})\]/s);
+        const match = aiText.match(/\[QUALIFIED:\s*({[\s\S]*?})\]/);
         if (match) {
           try {
             const leadData = JSON.parse(match[1]);
-            const agentId = from && from !== 'simulated-user' ? from : null;
-            await addDoc(collection(db, 'leads'), {
-              ...leadData,
-              ...(agentId ? { agentId } : {}),
-              score: 0,
-              status: 'warm',
-              source: 'simulator',
-              createdAt: new Date().toISOString()
+
+            // Score the lead using the same logic as /api/score-lead
+            const scoreRes = await fetch(`http://localhost:3000/api/score-lead`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(leadData)
             });
+            const { score } = await scoreRes.json();
+
+            const status = score >= 70 ? 'hot' : score >= 45 ? 'warm' : 'cold';
+
+            await addDoc(collection(db, 'leads'), {
+              agentId: agentId || null,
+              name: leadData.name || '',
+              email: leadData.email || '',
+              phone: leadData.phone || '',
+              currentAddress: leadData.currentAddress || '',
+              type: (leadData.type || 'buy').toLowerCase().includes('rent') ? 'rent' : 'buy',
+              timeline: leadData.timeline || '',
+              budget: leadData.budget || '',
+              preApproved: leadData.preApproved || '',
+              downPaymentReady: leadData.downPaymentReady || '',
+              locationPreference: leadData.locationPreference || '',
+              motivation: leadData.motivation || '',
+              employmentInfo: {
+                company: leadData.employer || '',
+                salary: leadData.salary || '',
+                validated: false,
+              },
+              score,
+              status,
+              source: 'whatsapp-simulator',
+              createdAt: new Date().toISOString(),
+            });
+
+            leadCaptured = true;
+            console.log(`[Chat] Lead saved — score: ${score}, status: ${status}`);
           } catch (e) {
             console.error('[Chat] Failed to save lead:', e);
           }
-          aiText = aiText.replace(/\[QUALIFIED:.*?\]/gs, '').trim() + "\n\nThank you! Your information has been captured. The agent will be in touch shortly.";
+          aiText = aiText.replace(/\[QUALIFIED:[\s\S]*?\]/g, '').trim() +
+            "\n\nThank you! Your profile has been captured and shared with your agent. They'll be in touch shortly! 🏡";
         }
       }
 
-      res.json({ reply: aiText.replace(/\[QUALIFIED:.*?\]/gs, '').trim() });
+      res.json({ reply: aiText.replace(/\[QUALIFIED:[\s\S]*?\]/g, '').trim(), leadCaptured });
     } catch (error) {
       console.error('[Simulator Error]:', error);
       res.status(500).json({ error: 'Failed to process chat' });
@@ -468,19 +513,57 @@ async function startServer() {
   });
 
   app.post('/api/score-lead', (req, res) => {
-    const { name, email, phone, currentAddress, type, salary, company } = req.body;
-    
+    const { name, email, phone, currentAddress, timeline, preApproved, budget, downPaymentReady, locationPreference, motivation, salary } = req.body;
+
     let score = 0;
-    if (name) score += 10;
-    if (email) score += 10;
-    if (phone) score += 10;
-    if (currentAddress) score += 10;
-    
-    if (salary && parseInt(salary) > 50000) score += 20;
-    if (company) score += 20;
-    
-    score += Math.floor(Math.random() * 20);
-    
+
+    // Contact completeness (max 10)
+    if (name) score += 2;
+    if (email) score += 3;
+    if (phone) score += 3;
+    if (currentAddress) score += 2;
+
+    // Timeline urgency (max 25)
+    const tl = (timeline || '').toLowerCase();
+    if (tl.includes('asap') || tl.includes('now') || tl.includes('immediately')) score += 25;
+    else if (tl.includes('1-3') || tl.includes('1 to 3')) score += 18;
+    else if (tl.includes('3-6') || tl.includes('3 to 6') || tl.includes('6') || tl.includes('soon')) score += 10;
+    else if (tl.includes('year') || tl.includes('12') || tl.includes('looking')) score += 3;
+
+    // Pre-approval status (max 20)
+    const pa = (preApproved || '').toLowerCase();
+    if (pa.includes('yes') || pa.includes('approved')) score += 20;
+    else if (pa.includes('process') || pa.includes('qualified')) score += 12;
+    else if (pa.includes('no') || pa.includes('not')) score += 4;
+
+    // Budget specificity (max 18)
+    if (budget && budget.length > 3) {
+      const hasDollarOrNumber = /[\$\d]/.test(budget);
+      score += hasDollarOrNumber ? 18 : 10;
+    }
+
+    // Down payment (max 15)
+    const dp = (downPaymentReady || '').toLowerCase();
+    if (dp.includes('20') || (dp.includes('yes') && dp.includes('more'))) score += 15;
+    else if (dp.includes('yes') || dp.includes('ready')) score += 10;
+    else if (dp.includes('financ') || dp.includes('entirely')) score += 4;
+
+    // Location specificity (max 8)
+    if (locationPreference && locationPreference.length > 3) score += 8;
+
+    // Motivation urgency (max 7)
+    const mot = (motivation || '').toLowerCase();
+    if (mot.includes('relocat') || mot.includes('job')) score += 7;
+    else if (mot.includes('upgrad') || mot.includes('growing')) score += 6;
+    else if (mot.includes('invest')) score += 5;
+    else if (mot.includes('explor') || mot.includes('just')) score += 1;
+
+    // Income bonus (max 5 extra)
+    const salaryNum = parseInt((salary || '0').replace(/[^0-9]/g, ''));
+    if (salaryNum >= 150000) score += 5;
+    else if (salaryNum >= 100000) score += 3;
+    else if (salaryNum >= 60000) score += 1;
+
     res.json({ score: Math.min(score, 100) });
   });
 

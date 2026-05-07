@@ -90,8 +90,15 @@ export default function Contacts() {
         phone,
         currentAddress: '',
         type: 'rent',
+        timeline: '',
+        budget: '',
+        preApproved: '',
+        downPaymentReady: '',
+        locationPreference: '',
+        motivation: '',
         score: 50,
         status: 'cold',
+        source: 'contacts',
         createdAt: new Date().toISOString()
       };
 

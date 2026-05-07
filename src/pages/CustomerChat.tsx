@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { doc, getDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, collection, addDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Agent } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, User, MessageSquare, CheckCircle2, Phone, Mail, MapPin, Briefcase, DollarSign } from 'lucide-react';
+import { Send, User, MessageSquare, CheckCircle2, Phone, Mail, MapPin, Briefcase, DollarSign, Clock, Home, Target, CreditCard } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -14,13 +14,19 @@ interface Message {
 }
 
 const QUESTIONS = [
-  { id: 'name', text: "Hi! I'm your real estate assistant. What's your full name?", icon: <User className="w-5 h-5" /> },
-  { id: 'email', text: "Great to meet you! What's your email address?", icon: <Mail className="w-5 h-5" /> },
-  { id: 'phone', text: "And your phone number?", icon: <Phone className="w-5 h-5" /> },
-  { id: 'address', text: "What's your current address?", icon: <MapPin className="w-5 h-5" /> },
-  { id: 'type', text: "Are you looking to buy or rent a property?", icon: <MessageSquare className="w-5 h-5" />, choices: ['Buy', 'Rent'] },
-  { id: 'company', text: "Which company are you currently working for?", icon: <Briefcase className="w-5 h-5" /> },
-  { id: 'salary', text: "What's your approximate annual salary?", icon: <DollarSign className="w-5 h-5" /> },
+  { id: 'name',             text: "Hi! I'm your real estate assistant. What's your full name?", icon: <User className="w-5 h-5" /> },
+  { id: 'email',            text: "Great to meet you! What's your email address?", icon: <Mail className="w-5 h-5" /> },
+  { id: 'phone',            text: "And your best phone number?", icon: <Phone className="w-5 h-5" /> },
+  { id: 'currentAddress',   text: "What's your current home address?", icon: <MapPin className="w-5 h-5" /> },
+  { id: 'type',             text: "Are you looking to buy or rent a property?", icon: <Home className="w-5 h-5" />, choices: ['Buy', 'Rent'] },
+  { id: 'timeline',         text: "What's your timeline for moving?", icon: <Clock className="w-5 h-5" />, choices: ['ASAP', '1–3 months', '3–6 months', 'Just exploring'] },
+  { id: 'budget',           text: "What's your budget or price range? (e.g. $400k–$600k)", icon: <DollarSign className="w-5 h-5" /> },
+  { id: 'preApproved',      text: "Have you been pre-approved for a mortgage?", icon: <CreditCard className="w-5 h-5" />, choices: ['Yes, pre-approved', 'In process', 'Not yet'] },
+  { id: 'downPaymentReady', text: "Do you have a down payment ready?", icon: <CreditCard className="w-5 h-5" />, choices: ['Yes, 20%+', 'Yes, less than 20%', 'Financing entirely', 'Not yet'] },
+  { id: 'locationPreference', text: "Which neighbourhood or area are you interested in?", icon: <MapPin className="w-5 h-5" /> },
+  { id: 'motivation',       text: "What's your main reason for moving?", icon: <Target className="w-5 h-5" />, choices: ['Relocating / job change', 'Upgrading / downsizing', 'Investment', 'Just exploring'] },
+  { id: 'company',          text: "Who is your current employer?", icon: <Briefcase className="w-5 h-5" /> },
+  { id: 'salary',           text: "What's your approximate annual household income?", icon: <DollarSign className="w-5 h-5" /> },
 ];
 
 export default function CustomerChat() {
@@ -92,29 +98,37 @@ export default function CustomerChat() {
         setIsFinished(true);
         setCountdown(5);
 
-        // Call scoring API
+        // Call scoring API with all new fields
         const response = await fetch('/api/score-lead', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(newAnswers),
         });
         const { score } = await response.json();
+        const status = score >= 70 ? 'hot' : score >= 45 ? 'warm' : 'cold';
 
-        // Save to Firestore
+        // Save to Firestore with all qualification fields
         await addDoc(collection(db, 'leads'), {
           agentId,
-          name: newAnswers.name,
-          email: newAnswers.email,
-          phone: newAnswers.phone,
-          currentAddress: newAnswers.address,
-          type: newAnswers.type.toLowerCase(),
-          score,
-          status: 'cold',
+          name: newAnswers.name || '',
+          email: newAnswers.email || '',
+          phone: newAnswers.phone || '',
+          currentAddress: newAnswers.currentAddress || '',
+          type: (newAnswers.type || 'buy').toLowerCase().includes('rent') ? 'rent' : 'buy',
+          timeline: newAnswers.timeline || '',
+          budget: newAnswers.budget || '',
+          preApproved: newAnswers.preApproved || '',
+          downPaymentReady: newAnswers.downPaymentReady || '',
+          locationPreference: newAnswers.locationPreference || '',
+          motivation: newAnswers.motivation || '',
           employmentInfo: {
-            company: newAnswers.company,
-            salary: newAnswers.salary,
-            validated: true,
+            company: newAnswers.company || '',
+            salary: newAnswers.salary || '',
+            validated: false,
           },
+          score,
+          status,
+          source: 'qr-chat',
           createdAt: new Date().toISOString(),
         });
       }, 1500);

@@ -156,6 +156,7 @@ export default function LeadsDashboard() {
       <WhatsAppSimulator
         isOpen={isSimulatorOpen}
         onClose={() => setIsSimulatorOpen(false)}
+        agentId={userId || undefined}
       />
 
       <AnimatePresence>
