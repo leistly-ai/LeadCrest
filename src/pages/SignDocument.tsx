@@ -25,9 +25,19 @@ export default function SignDocument() {
   const [signatureDataUrl, setSignatureDataUrl] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const step = stepId ? STEP_MAP[stepId] : null;
+
+  // Check if a PDF document exists for this step
+  useEffect(() => {
+    if (!stepId) return;
+    const url = `/documents/${stepId}.pdf`;
+    fetch(url, { method: 'HEAD' }).then(r => {
+      if (r.ok) setPdfUrl(url);
+    }).catch(() => {});
+  }, [stepId]);
 
   useEffect(() => {
     if (!leadId || !stepId) return;
@@ -139,6 +149,7 @@ export default function SignDocument() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           leadId,
+          stepId,
           signerName: leadName,
           signerEmail: leadEmail,
           agentEmail,
@@ -151,6 +162,8 @@ export default function SignDocument() {
       });
 
       setFlowStep('done');
+      // Auto-close after 4 seconds
+      setTimeout(() => window.close(), 4000);
     } catch (err: any) {
       setError(err.message || 'Something went wrong. Please try again.');
     } finally {
@@ -224,7 +237,7 @@ export default function SignDocument() {
               <img src={signatureDataUrl} alt="Your signature" className="max-h-20 mx-auto" />
             )}
           </div>
-          <p className="text-xs text-charcoal/40 pt-2">You may close this window.</p>
+          <p className="text-xs text-charcoal/40 pt-2">This window will close automatically in a few seconds.</p>
         </motion.div>
       </SignLayout>
     );
@@ -395,46 +408,59 @@ export default function SignDocument() {
           </div>
 
           {/* Doc body */}
-          <div className="bg-white p-5 space-y-4 text-sm">
-            {/* Summary excerpt */}
-            <div className="text-charcoal/60 leading-relaxed text-xs space-y-1.5">
-              {summaryLines.slice(0, 6).map((line, i) => (
-                <p key={i} className={line === '' ? 'mt-1' : ''}>{line}</p>
-              ))}
-              {summaryLines.length > 6 && (
-                <p className="text-charcoal/30 italic">… and more as detailed in the full document.</p>
-              )}
-            </div>
-
-            <div className="border-t border-zinc-100 pt-4">
-              <p className="text-[10px] font-bold text-charcoal/40 uppercase tracking-widest mb-2">Acknowledgement</p>
-              <p className="text-xs text-midnight leading-relaxed">{step.acknowledgement}</p>
-            </div>
-
-            {/* Signer details */}
-            <div className="border border-zinc-200 rounded-xl p-4 space-y-2 bg-zinc-50/50">
-              <Row label="Signed by" value={leadName} />
-              <Row label="Email" value={leadEmail || '—'} />
-              <Row label="Document" value={`${step.title} (${step.docLabel})`} />
-              <Row label="Date" value={today} />
-            </div>
-
-            {/* Signature display */}
-            <div className="border border-zinc-200 rounded-xl p-4 bg-white">
-              <p className="text-[10px] text-charcoal/40 font-bold uppercase tracking-widest mb-3">Electronic Signature</p>
-              <div className="bg-zinc-50 rounded-lg p-3 flex items-center justify-center min-h-[80px]">
-                {signatureDataUrl && (
-                  <img src={signatureDataUrl} alt="Your signature" className="max-h-20 max-w-full" />
+          <div className="bg-white space-y-4 text-sm">
+            {/* PDF viewer or text summary */}
+            {pdfUrl ? (
+              <div className="w-full bg-zinc-50 border-b border-zinc-100">
+                <iframe
+                  src={pdfUrl}
+                  title={step.title}
+                  className="w-full"
+                  style={{ height: '420px', border: 'none' }}
+                />
+              </div>
+            ) : (
+              <div className="p-5 text-charcoal/60 leading-relaxed text-xs space-y-1.5">
+                {summaryLines.slice(0, 6).map((line, i) => (
+                  <p key={i} className={line === '' ? 'mt-1' : ''}>{line}</p>
+                ))}
+                {summaryLines.length > 6 && (
+                  <p className="text-charcoal/30 italic">… and more as detailed in the full document.</p>
                 )}
               </div>
-              <div className="mt-2 border-t border-zinc-200 pt-2">
-                <p className="text-[10px] text-charcoal/30 text-center">× {leadName} — {today}</p>
-              </div>
-            </div>
+            )}
 
-            <p className="text-[10px] text-charcoal/30 leading-relaxed">
-              By confirming, you agree this electronic signature is legally binding under the Electronic Commerce Act (Ontario). A signed copy will be emailed to your agent, with a copy to you at {leadEmail || 'your email'}.
-            </p>
+            <div className="p-5 space-y-4">
+              <div className="border-t border-zinc-100 pt-4">
+                <p className="text-[10px] font-bold text-charcoal/40 uppercase tracking-widest mb-2">Acknowledgement</p>
+                <p className="text-xs text-midnight leading-relaxed">{step.acknowledgement}</p>
+              </div>
+
+              {/* Signer details */}
+              <div className="border border-zinc-200 rounded-xl p-4 space-y-2 bg-zinc-50/50">
+                <Row label="Signed by" value={leadName} />
+                <Row label="Email" value={leadEmail || '—'} />
+                <Row label="Document" value={`${step.title} (${step.docLabel})`} />
+                <Row label="Date" value={today} />
+              </div>
+
+              {/* Signature display */}
+              <div className="border border-zinc-200 rounded-xl p-4 bg-white">
+                <p className="text-[10px] text-charcoal/40 font-bold uppercase tracking-widest mb-3">Electronic Signature</p>
+                <div className="bg-zinc-50 rounded-lg p-3 flex items-center justify-center min-h-[80px]">
+                  {signatureDataUrl && (
+                    <img src={signatureDataUrl} alt="Your signature" className="max-h-20 max-w-full" />
+                  )}
+                </div>
+                <div className="mt-2 border-t border-zinc-200 pt-2">
+                  <p className="text-[10px] text-charcoal/30 text-center">× {leadName} — {today}</p>
+                </div>
+              </div>
+
+              <p className="text-[10px] text-charcoal/30 leading-relaxed">
+                By confirming, you agree this electronic signature is legally binding under the Electronic Commerce Act (Ontario). A signed copy will be emailed to your agent, with a copy to you at {leadEmail || 'your email'}.
+              </p>
+            </div>
           </div>
         </div>
 
