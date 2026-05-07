@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { Resend } from 'resend';
 import { GoogleGenAI } from '@google/genai';
-import { initializeApp, getApps } from 'firebase-admin/app';
+import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 
 // Use fs to read JSON to avoid ESM import issues with JSON modules
@@ -37,10 +37,15 @@ async function startServer() {
     
     let app;
     if (getApps().length === 0) {
+      const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      const credential = serviceAccountPath
+        ? cert(JSON.parse(fs.readFileSync(path.resolve(serviceAccountPath), 'utf8')))
+        : undefined;
       app = initializeApp({
+        ...(credential ? { credential } : {}),
         projectId: firebaseConfig.projectId,
       });
-      console.log('[Firebase Admin] Initialized successfully');
+      console.log(`[Firebase Admin] Initialized with ${credential ? 'service account' : 'default credentials'}`);
     } else {
       app = getApps()[0];
     }
