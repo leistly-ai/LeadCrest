@@ -34,8 +34,29 @@ export default function Navbar({ user }: { user: FirebaseUser | null }) {
     }
   };
 
+  const isChatPage = location.pathname.startsWith('/chat/');
+
+  if (isChatPage) {
+    return (
+      <nav className="bg-white border-b border-zinc-100 sticky top-0 z-50">
+        <div className="container mx-auto px-6 h-16 flex items-center justify-center">
+          <div className="flex items-center gap-3">
+            <div className="relative w-8 h-8 flex items-center justify-center">
+              <ChevronUp className="w-7 h-7 text-honey absolute -top-1" strokeWidth={3} />
+              <Network className="w-5 h-5 text-honey/60 absolute bottom-0" strokeWidth={1.5} />
+            </div>
+            <div className="flex flex-col items-center">
+              <span className="text-xl font-black tracking-tighter text-midnight leading-none">LEADCREST</span>
+              <span className="text-[9px] font-bold text-honey uppercase tracking-[0.2em] mt-0.5">Engaged Intelligence</span>
+            </div>
+          </div>
+        </div>
+      </nav>
+    );
+  }
+
   return (
-    <nav 
+    <nav
       onClick={scrollToTop}
       className="bg-white border-b border-zinc-100 sticky top-0 z-50 cursor-pointer"
     >

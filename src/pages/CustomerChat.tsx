@@ -34,6 +34,7 @@ export default function CustomerChat() {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [isFinished, setIsFinished] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -54,6 +55,16 @@ export default function CustomerChat() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
+
+  useEffect(() => {
+    if (countdown === null) return;
+    if (countdown === 0) {
+      window.close();
+      return;
+    }
+    const timer = setTimeout(() => setCountdown(c => (c ?? 1) - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [countdown]);
 
   const handleSend = async (text: string) => {
     if (!text.trim()) return;
@@ -79,6 +90,7 @@ export default function CustomerChat() {
         setIsTyping(false);
         setMessages(prev => [...prev, { id: 'final', text: "Thank you! We're analyzing your profile and a real estate agent will be in touch shortly.", sender: 'bot' }]);
         setIsFinished(true);
+        setCountdown(5);
 
         // Call scoring API
         const response = await fetch('/api/score-lead', {
@@ -224,15 +236,9 @@ export default function CustomerChat() {
           </div>
           <h3 className="font-bold text-zinc-800 text-sm">Application Sent!</h3>
           <p className="text-[11px] text-zinc-500">Your profile has been shared with {agent.name}. They will contact you shortly.</p>
-          
-          <a 
-            href={`https://wa.me/${agent.phone.replace(/\D/g, '')}?text=Hi ${agent.name}, I just completed the qualification form for a property!`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-[#25D366] text-white font-bold text-xs hover:bg-[#128C7E] transition-all shadow-md mt-2"
-          >
-            Message on WhatsApp
-          </a>
+          {countdown !== null && countdown > 0 && (
+            <p className="text-[10px] text-zinc-400">This window will close in {countdown}s...</p>
+          )}
         </div>
       )}
     </div>
