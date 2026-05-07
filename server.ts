@@ -279,7 +279,7 @@ async function startServer() {
         const signatureBase64 = signature.replace(/^data:image\/png;base64,/, '');
 
         await resend.emails.send({
-          from: 'LeadCrest <onboarding@resend.dev>',
+          from: 'LeadCrest <notifications@leistly.com>',
           to: recipientEmail,
           subject: `✍️ ${signerName} signed "${stepTitle}"`,
           attachments: [
