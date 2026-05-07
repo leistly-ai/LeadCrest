@@ -309,37 +309,43 @@ async function startServer() {
 
     try {
       const { db } = await import('./src/firebase');
-      const { getDocs, collection, addDoc } = await import('firebase/firestore');
-      
-      const ai = getAI();
-      
-      // Use the same system prompt logic as the webhook
-      const systemPrompt = "You are a professional real estate assistant. Qualify this lead by asking: Name, Email, Phone, Address, Buy/Rent, Employer, Salary. Ask ONE question at a time. Output JSON [QUALIFIED: {...}] at the end.";
-      
-      const fullHistory = [
-        { role: 'system', parts: [{ text: systemPrompt }] },
-        ...(history || [])
-      ];
+      const { collection, addDoc } = await import('firebase/firestore');
 
-      const result = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: fullHistory,
+      const ai = getAI();
+
+      const systemPrompt = "You are a professional real estate assistant. Qualify this lead by asking ONE question at a time in this order: Full Name, Email, Phone Number, Current Address, Buying or Renting, Employer, Annual Salary. Once you have all answers, thank them and output exactly: [QUALIFIED: {\"name\":\"...\",\"email\":\"...\",\"phone\":\"...\",\"address\":\"...\",\"type\":\"buy or rent\",\"employer\":\"...\",\"salary\":\"...\"}]";
+
+      // Filter out any system-role messages from history — Gemini only accepts user/model
+      const contents = (history || []).filter((m: any) => m.role === 'user' || m.role === 'model');
+
+      // Append the latest user message
+      contents.push({ role: 'user', parts: [{ text: message }] });
+
+      const result = await generateWithFallback(ai, {
+        contents,
+        config: { systemInstruction: systemPrompt },
       });
 
       let aiText = result.text || "I'm here to help!";
 
-      // Handle qualification logic (same as webhook)
       if (aiText.includes('[QUALIFIED:')) {
         const match = aiText.match(/\[QUALIFIED:\s*({.*?})\]/s);
         if (match) {
-          const leadData = JSON.parse(match[1]);
-          await addDoc(collection(db, 'leads'), {
-            ...leadData,
-            status: 'warm',
-            source: 'simulator',
-            createdAt: new Date().toISOString()
-          });
-          aiText = aiText.replace(/\[QUALIFIED:.*?\]/gs, '').trim() + "\n\n(Lead Captured in Dashboard!)";
+          try {
+            const leadData = JSON.parse(match[1]);
+            const agentId = from && from !== 'simulated-user' ? from : null;
+            await addDoc(collection(db, 'leads'), {
+              ...leadData,
+              ...(agentId ? { agentId } : {}),
+              score: 0,
+              status: 'warm',
+              source: 'simulator',
+              createdAt: new Date().toISOString()
+            });
+          } catch (e) {
+            console.error('[Chat] Failed to save lead:', e);
+          }
+          aiText = aiText.replace(/\[QUALIFIED:.*?\]/gs, '').trim() + "\n\nThank you! Your information has been captured. The agent will be in touch shortly.";
         }
       }
 
