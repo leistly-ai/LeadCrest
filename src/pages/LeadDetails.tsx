@@ -4,12 +4,12 @@ import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Lead, LeadStatus } from '../types';
 import { motion } from 'motion/react';
-import { 
-  ArrowLeft, Phone, Mail, MapPin, Briefcase, DollarSign, 
-  ShieldCheck, FileText, CheckCircle2, AlertCircle, 
-  Download, ExternalLink, MessageSquare, UserCheck, 
-  CreditCard, Building2, Scale
+import {
+  ArrowLeft, Phone, Mail, MapPin, Briefcase, DollarSign,
+  ShieldCheck, CheckCircle2,
+  UserCheck, CreditCard, Building2, Clock, Target, Home, DollarSign as BudgetIcon
 } from 'lucide-react';
+import TransactionPipeline from '../components/TransactionPipeline';
 
 export default function LeadDetails() {
   const { id } = useParams();
@@ -60,28 +60,15 @@ export default function LeadDetails() {
           <ArrowLeft className="w-4 h-4" /> Back to Dashboard
         </button>
         <div className="flex gap-3">
-          <button
-            onClick={() => updateStatus('warm')}
-            disabled={lead.status === 'warm' || updating}
-            className={`px-4 py-2 rounded-custom text-sm font-bold transition-all flex items-center gap-2 shadow-sm ${
-              lead.status === 'warm' 
-                ? 'bg-honey/10 text-honey border border-honey/20' 
-                : 'bg-white border border-zinc-200 text-charcoal/80 hover:bg-zinc-50'
-            }`}
-          >
-            <UserCheck className="w-4 h-4" /> Mark as Warm
-          </button>
-          <button
-            onClick={() => updateStatus('completion')}
-            disabled={lead.status === 'completion' || updating}
-            className={`px-4 py-2 rounded-custom text-sm font-bold transition-all flex items-center gap-2 shadow-sm ${
-              lead.status === 'completion' 
-                ? 'bg-midnight/10 text-midnight border border-midnight/20' 
-                : 'bg-honey hover:bg-[#c29262] text-white'
-            }`}
-          >
-            <CheckCircle2 className="w-4 h-4" /> Move to Completion
-          </button>
+          <span className={`px-4 py-2 rounded-full text-xs font-bold uppercase tracking-widest flex items-center gap-2 ${
+            lead.status === 'hot' ? 'bg-red-100 text-red-600' :
+            lead.status === 'warm' ? 'bg-honey/10 text-honey' :
+            lead.status === 'completion' ? 'bg-midnight/10 text-midnight' :
+            'bg-zinc-100 text-charcoal/40'
+          }`}>
+            <span className="w-2 h-2 rounded-full bg-current animate-pulse" />
+            {lead.status}
+          </span>
         </div>
       </div>
 
@@ -182,53 +169,49 @@ export default function LeadDetails() {
           </div>
         </div>
 
-        {/* Action Sidebar */}
+        {/* Qualification Summary Sidebar */}
         <div className="space-y-6">
-          <div className="p-8 rounded-custom border border-zinc-200 bg-white space-y-6 shadow-sm">
-            <h3 className="font-bold text-midnight">Next Steps</h3>
-            <div className="space-y-4">
-              <ActionItem 
-                icon={<Phone className="w-4 h-4" />} 
-                title="Call Lead" 
-                description="Validate identity and intent." 
-                active={lead.status === 'cold'}
-              />
-              <ActionItem 
-                icon={<FileText className="w-4 h-4" />} 
-                title="Gather Documents" 
-                description="ID, Paystubs, Bank Statements." 
-                active={lead.status === 'warm'}
-              />
-              <ActionItem 
-                icon={<Scale className="w-4 h-4" />} 
-                title="Legal Package" 
-                description="Send to lawyers or LTB." 
-                active={lead.status === 'completion'}
-              />
+          <div className="p-6 rounded-custom border border-zinc-200 bg-white space-y-4 shadow-sm">
+            <h3 className="font-bold text-midnight text-sm">Qualification Details</h3>
+            <div className="space-y-3">
+              <SidebarItem icon={<Clock className="w-3.5 h-3.5" />} label="Timeline" value={(lead as any).timeline || '—'} />
+              <SidebarItem icon={<BudgetIcon className="w-3.5 h-3.5" />} label="Budget" value={(lead as any).budget || '—'} />
+              <SidebarItem icon={<CreditCard className="w-3.5 h-3.5" />} label="Pre-Approved" value={(lead as any).preApproved || '—'} />
+              <SidebarItem icon={<Home className="w-3.5 h-3.5" />} label="Down Payment" value={(lead as any).downPaymentReady || '—'} />
+              <SidebarItem icon={<MapPin className="w-3.5 h-3.5" />} label="Location Pref." value={(lead as any).locationPreference || '—'} />
+              <SidebarItem icon={<Target className="w-3.5 h-3.5" />} label="Motivation" value={(lead as any).motivation || '—'} />
             </div>
           </div>
 
-          <div className="p-8 rounded-custom border border-honey/20 bg-honey/5 space-y-6 shadow-sm">
-            <h3 className="font-bold text-honey">Generate Documents</h3>
-            <p className="text-sm text-charcoal/70 leading-relaxed">
-              {lead.type === 'buy' 
-                ? 'Generate a comprehensive mortgage and legal package for the bank and lawyers.' 
-                : 'Generate the standard Ontario LTB Tenancy Agreement (Form 2229E).'}
-            </p>
-            <button
-              disabled={lead.status !== 'completion'}
-              className="w-full py-4 bg-honey hover:bg-[#c29262] disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-custom transition-all flex items-center justify-center gap-2 shadow-md"
-            >
-              <Download className="w-5 h-5" />
-              {lead.type === 'buy' ? 'Download Legal Package' : 'Generate LTB Contract'}
-            </button>
-            {lead.status !== 'completion' && (
-              <p className="text-[10px] text-charcoal/40 text-center uppercase tracking-widest font-bold">
-                Available in Completion Phase
-              </p>
-            )}
+          <div className="p-6 rounded-custom border border-zinc-200 bg-white space-y-4 shadow-sm">
+            <h3 className="font-bold text-midnight text-sm">Update Status</h3>
+            <div className="space-y-2">
+              {(['cold', 'warm', 'hot', 'completion'] as LeadStatus[]).map(s => (
+                <button
+                  key={s}
+                  onClick={() => updateStatus(s)}
+                  disabled={lead.status === s || updating}
+                  className={`w-full py-2.5 rounded-custom text-xs font-bold uppercase tracking-widest transition-all ${
+                    lead.status === s
+                      ? s === 'hot' ? 'bg-red-500 text-white' : s === 'warm' ? 'bg-honey text-white' : s === 'completion' ? 'bg-midnight text-white' : 'bg-zinc-200 text-zinc-600'
+                      : 'bg-white border border-zinc-200 text-charcoal/60 hover:bg-zinc-50'
+                  }`}
+                >
+                  {lead.status === s ? `● ${s}` : s}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
+      </div>
+
+      {/* Transaction Pipeline — full width below */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-bold text-midnight">Transaction Pipeline</h2>
+          <span className="text-xs text-charcoal/40 font-bold uppercase tracking-widest">Ontario TRESA Process · {lead.type === 'buy' ? 'Purchase' : 'Rental'}</span>
+        </div>
+        <TransactionPipeline lead={lead} onUpdate={setLead} />
       </div>
     </div>
   );
@@ -245,18 +228,13 @@ function ContactItem({ icon, label, value }: { icon: React.ReactNode; label: str
   );
 }
 
-function ActionItem({ icon, title, description, active }: { icon: React.ReactNode; title: string; description: string; active: boolean }) {
+function SidebarItem({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
-    <div className={`p-4 rounded-custom border transition-all ${
-      active ? 'border-honey/50 bg-honey/5' : 'border-zinc-100 bg-linen/30 opacity-50'
-    }`}>
-      <div className="flex items-center gap-3 mb-1">
-        <div className={`w-8 h-8 rounded-custom flex items-center justify-center ${active ? 'bg-honey text-white shadow-sm' : 'bg-zinc-200 text-zinc-400'}`}>
-          {icon}
-        </div>
-        <h4 className="font-bold text-sm text-midnight">{title}</h4>
-      </div>
-      <p className="text-xs text-charcoal/60 ml-11">{description}</p>
+    <div className="flex items-start justify-between gap-2">
+      <span className="text-[10px] font-bold text-charcoal/40 uppercase tracking-widest flex items-center gap-1 shrink-0 mt-0.5">
+        {icon} {label}
+      </span>
+      <span className="text-xs font-bold text-midnight text-right">{value}</span>
     </div>
   );
 }
