@@ -1,4 +1,7 @@
 import { useState } from 'react';
+import { doc, updateDoc, arrayUnion } from 'firebase/firestore';
+import { db } from '../firebase';
+import { auth } from '../firebase';
 import { Lead } from '../types';
 import { PIPELINE_STEPS, STEP_MAP } from '../data/pipelineSteps';
 import { motion, AnimatePresence } from 'motion/react';
@@ -56,13 +59,17 @@ export default function TransactionPipeline({ lead, onUpdate }: TransactionPipel
     setSendError(null);
 
     try {
+      const currentUser = auth.currentUser;
       const res = await fetch('/api/send-document-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           leadId: lead.id,
           stepId,
-          agentId: (lead as any).agentId,
+          leadEmail: lead.email,
+          leadName: lead.name,
+          agentEmail: currentUser?.email || '',
+          agentName: currentUser?.displayName || 'Your Agent',
           stepTitle: step.title,
           docLabel: step.docLabel,
           stepPhase: step.phase,
@@ -73,6 +80,11 @@ export default function TransactionPipeline({ lead, onUpdate }: TransactionPipel
         const d = await res.json();
         throw new Error(d.error || 'Failed to send email');
       }
+
+      // Update Firestore client-side (no Admin SDK needed)
+      await updateDoc(doc(db, 'leads', lead.id), {
+        completedSteps: arrayUnion(stepId),
+      });
 
       setSentSteps(prev => new Set(prev).add(stepId));
       onUpdate({ ...lead, ...({ completedSteps: [...completedSteps, stepId] } as any) });

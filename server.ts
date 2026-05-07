@@ -244,36 +244,21 @@ async function startServer() {
   });
 
   // ── Send Document Email to Lead ────────────────────────────────────────
+  // Firestore reads/writes are handled client-side; server only sends email.
   app.post('/api/send-document-email', async (req, res) => {
-    const { leadId, stepId, agentId, stepTitle, docLabel, stepPhase } = req.body;
-    if (!leadId || !stepId || !agentId || !stepTitle) {
+    const { leadEmail, leadName, agentEmail, agentName, leadId, stepId, stepTitle, docLabel, stepPhase } = req.body;
+    if (!leadEmail || !stepTitle || !leadId || !stepId) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
     try {
-      if (!adminDb) throw new Error('Firebase Admin not initialized');
-
-      const [leadDoc, agentDoc] = await Promise.all([
-        adminDb.collection('leads').doc(leadId).get(),
-        adminDb.collection('agents').doc(agentId).get(),
-      ]);
-
-      if (!leadDoc.exists) return res.status(404).json({ error: 'Lead not found' });
-
-      const lead = leadDoc.data();
-      const agent = agentDoc.exists ? agentDoc.data() : null;
-      const leadEmail = lead.email;
-      const leadName = lead.name?.split(' ')[0] || lead.name || 'there';
-      const agentName = agent?.name || 'Your Agent';
-      const agentEmail = agent?.email;
-
-      if (!leadEmail) return res.status(400).json({ error: 'Lead has no email address' });
-
       const resendKey = process.env.RESEND_API_KEY;
       if (!resendKey) return res.status(500).json({ error: 'Email service not configured' });
 
       const appUrl = process.env.APP_URL || 'http://localhost:3000';
       const signingLink = `${appUrl}/sign/${leadId}/${stepId}`;
+      const firstName = leadName?.split(' ')[0] || leadName || 'there';
+      const agentDisplayName = agentName || 'Your Agent';
 
       const resend = new Resend(resendKey);
       await resend.emails.send({
@@ -288,8 +273,8 @@ async function startServer() {
               <p style="color: rgba(255,255,255,0.6); margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">Secure Document Signing</p>
             </div>
             <div style="background: #fff; padding: 32px; border: 1px solid #e4e4e7; border-top: none; border-radius: 0 0 12px 12px;">
-              <p style="font-size: 16px; margin: 0 0 8px;">Hi ${leadName},</p>
-              <p style="font-size: 14px; color: #666; margin: 0 0 24px;">${agentName} has sent you a document to review and sign as part of your real estate transaction.</p>
+              <p style="font-size: 16px; margin: 0 0 8px;">Hi ${firstName},</p>
+              <p style="font-size: 14px; color: #666; margin: 0 0 24px;">${agentDisplayName} has sent you a document to review and sign as part of your real estate transaction.</p>
               <div style="background: #f9f9f9; border: 1px solid #e4e4e7; border-radius: 10px; padding: 20px; margin-bottom: 28px;">
                 <p style="font-size: 11px; color: #D4A373; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; margin: 0 0 6px;">${stepPhase || 'Transaction Document'}</p>
                 <p style="font-size: 18px; font-weight: 900; color: #1E3A5F; margin: 0 0 4px;">${stepTitle}</p>
@@ -301,16 +286,11 @@ async function startServer() {
                   Review &amp; Sign Document →
                 </a>
               </div>
-              <p style="font-size: 12px; color: #aaa; margin: 0 0 8px;">This link is secure and personalized for you. If you have any questions before signing, please contact ${agentName} directly.</p>
+              <p style="font-size: 12px; color: #aaa; margin: 0 0 8px;">This link is secure and personalized for you. If you have any questions before signing, please contact ${agentDisplayName} directly.</p>
               <p style="font-size: 11px; color: #ccc; margin: 0;">Electronic signatures are legally binding under the Electronic Commerce Act (Ontario).</p>
             </div>
           </div>
         `,
-      });
-
-      // Mark step as email-sent in Firestore
-      await adminDb.collection('leads').doc(leadId).update({
-        completedSteps: FieldValue.arrayUnion(stepId),
       });
 
       console.log(`[Email] Document email sent to ${leadEmail} (CC: ${agentEmail}) for step ${stepId}`);
@@ -322,54 +302,32 @@ async function startServer() {
   });
 
   // ── Document Signing Endpoint ──────────────────────────────────────────
+  // Firestore writes are handled client-side; server only sends the notification email.
   app.post('/api/sign-document', async (req, res) => {
-    const { leadId, stepId, agentId, signerName, signerEmail, signature, stepTitle, docLabel } = req.body;
-    if (!leadId || !stepId || !signature || !signerName) {
+    const { leadId, signerName, signerEmail, agentEmail, agentName, signature, stepTitle, docLabel, signedAt: clientSignedAt } = req.body;
+    if (!signature || !signerName || !agentEmail) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
     try {
-      if (!adminDb) throw new Error('Firebase Admin not initialized');
-
-      const signedAt = new Date().toISOString();
-
-      // 1. Save signature to Firestore
-      const leadRef = adminDb.collection('leads').doc(leadId);
-      await leadRef.update({
-        [`signatures.${stepId}`]: { signerName, signedAt, docLabel },
-        completedSteps: FieldValue.arrayUnion(stepId),
-      });
-      console.log(`[Sign] ${signerName} signed "${stepTitle}" for lead ${leadId}`);
-
-      // 2. Get agent email for notification
-      let agentEmail: string | null = null;
-      let agentName = 'Your Agent';
-      if (agentId) {
-        const agentDoc = await adminDb.collection('agents').doc(agentId).get();
-        if (agentDoc.exists) {
-          agentEmail = agentDoc.data()?.email || null;
-          agentName = agentDoc.data()?.name || 'Your Agent';
-        }
-      }
-
-      // 3. Send signed-document email: TO agent, CC lead
+      const signedAt = clientSignedAt || new Date().toISOString();
       const resendKey = process.env.RESEND_API_KEY;
       const appUrl = process.env.APP_URL || 'http://localhost:3000';
-      const recipientEmail = agentEmail || process.env.REALTOR_EMAIL;
+      const agentDisplayName = agentName || 'Your Agent';
 
-      if (resendKey && recipientEmail) {
+      if (resendKey) {
         const resend = new Resend(resendKey);
         const signatureBase64 = signature.replace(/^data:image\/png;base64,/, '');
         const signedDateStr = new Date(signedAt).toLocaleString('en-CA', { timeZone: 'America/Toronto', dateStyle: 'full', timeStyle: 'short' });
 
         await resend.emails.send({
           from: 'LeadCrest <notifications@leistly.com>',
-          to: recipientEmail,
+          to: agentEmail,
           cc: signerEmail ? [signerEmail] : undefined,
           subject: `✍️ ${signerName} signed "${stepTitle}"`,
           attachments: [
             {
-              filename: `${docLabel.replace(/\s+/g, '_')}_signed.png`,
+              filename: `${(docLabel || 'document').replace(/\s+/g, '_')}_signed.png`,
               content: Buffer.from(signatureBase64, 'base64'),
             },
           ],
@@ -380,9 +338,8 @@ async function startServer() {
                 <p style="color: rgba(255,255,255,0.6); margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">Document Signed</p>
               </div>
               <div style="background: #fff; padding: 32px; border: 1px solid #e4e4e7; border-top: none; border-radius: 0 0 12px 12px;">
-                <p style="font-size: 16px; margin: 0 0 8px;">Hi ${agentName},</p>
+                <p style="font-size: 16px; margin: 0 0 8px;">Hi ${agentDisplayName},</p>
                 <p style="font-size: 14px; color: #666; margin: 0 0 24px;"><strong>${signerName}</strong> has reviewed and signed the following document. A copy has also been sent to them.</p>
-
                 <div style="background: #f9f9f9; border: 1px solid #e4e4e7; border-radius: 10px; padding: 20px; margin-bottom: 24px;">
                   <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
                     <tr><td style="color: #888; padding: 5px 0; width: 140px;">Document</td><td style="font-weight: 700;">${stepTitle}</td></tr>
@@ -392,13 +349,11 @@ async function startServer() {
                     <tr><td style="color: #888; padding: 5px 0;">Signed at</td><td style="font-weight: 700;">${signedDateStr} (Toronto)</td></tr>
                   </table>
                 </div>
-
                 <p style="font-size: 14px; font-weight: 700; margin: 0 0 12px;">Electronic Signature:</p>
                 <div style="border: 2px solid #e4e4e7; border-radius: 10px; padding: 20px; background: #fafafa; text-align: center; margin-bottom: 8px;">
                   <img src="data:image/png;base64,${signatureBase64}" alt="Signature of ${signerName}" style="max-width: 100%; max-height: 120px;" />
                 </div>
                 <p style="font-size: 11px; color: #aaa; margin: 0 0 28px; text-align: center;">Signature of ${signerName} — ${signedDateStr}</p>
-
                 <a href="${appUrl}/lead/${leadId}" style="display: inline-block; background: #D4A373; color: #fff; font-weight: 900; text-decoration: none; padding: 14px 28px; border-radius: 10px; font-size: 14px;">
                   View Lead in Dashboard →
                 </a>
@@ -407,16 +362,13 @@ async function startServer() {
             </div>
           `,
         });
-
-        console.log(`[Sign] Notification sent to ${recipientEmail}, CC: ${signerEmail}`);
-      } else {
-        console.warn('[Sign] Resend not configured or no recipient email — skipping notification.');
+        console.log(`[Sign] Notification sent to ${agentEmail}, CC: ${signerEmail}`);
       }
 
       res.json({ success: true, signedAt });
     } catch (error: any) {
       console.error('[Sign] Error:', error);
-      res.status(500).json({ error: error.message || 'Failed to save signature' });
+      res.status(500).json({ error: error.message || 'Failed to send notification' });
     }
   });
 

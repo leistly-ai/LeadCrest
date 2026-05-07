@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore';
 import { db } from '../firebase';
 import { STEP_MAP } from '../data/pipelineSteps';
 import { CheckCircle2, PenLine, RotateCcw, ChevronUp, Network, AlertTriangle, ArrowRight, ArrowLeft } from 'lucide-react';
@@ -14,6 +14,8 @@ export default function SignDocument() {
   const [leadName, setLeadName] = useState('');
   const [leadEmail, setLeadEmail] = useState('');
   const [agentId, setAgentId] = useState('');
+  const [agentEmail, setAgentEmail] = useState('');
+  const [agentName, setAgentName] = useState('');
   const [loadingLead, setLoadingLead] = useState(true);
   const [alreadySigned, setAlreadySigned] = useState(false);
 
@@ -35,8 +37,18 @@ export default function SignDocument() {
       const data = leadDoc.data();
       setLeadName(data.name || '');
       setLeadEmail(data.email || '');
-      setAgentId(data.agentId || '');
+      const aid = data.agentId || '';
+      setAgentId(aid);
       if ((data.signatures || {})[stepId]) setAlreadySigned(true);
+
+      // Fetch agent profile for email notification
+      if (aid) {
+        const agentDoc = await getDoc(doc(db, 'agents', aid));
+        if (agentDoc.exists()) {
+          setAgentEmail(agentDoc.data().email || '');
+          setAgentName(agentDoc.data().name || '');
+        }
+      }
       setLoadingLead(false);
     };
     load();
@@ -113,24 +125,31 @@ export default function SignDocument() {
     setSubmitting(true);
     setError('');
     try {
-      const res = await fetch('/api/sign-document', {
+      const signedAt = new Date().toISOString();
+
+      // 1. Save signature to Firestore client-side (no Admin SDK needed)
+      await updateDoc(doc(db, 'leads', leadId), {
+        [`signatures.${stepId}`]: { signerName: leadName, signedAt, docLabel: step?.docLabel },
+        completedSteps: arrayUnion(stepId),
+      });
+
+      // 2. Send notification email via server (server only needs to call Resend)
+      await fetch('/api/sign-document', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           leadId,
-          stepId,
-          agentId,
           signerName: leadName,
           signerEmail: leadEmail,
+          agentEmail,
+          agentName,
           signature: signatureDataUrl,
           stepTitle: step?.title,
           docLabel: step?.docLabel,
+          signedAt,
         }),
       });
-      if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error || 'Submission failed');
-      }
+
       setFlowStep('done');
     } catch (err: any) {
       setError(err.message || 'Something went wrong. Please try again.');
