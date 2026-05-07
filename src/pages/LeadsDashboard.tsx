@@ -1,9 +1,9 @@
 import { useEffect, useState, useMemo } from 'react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs, writeBatch } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { Lead } from '../types';
-import { Users, TrendingUp, Search, Filter, ExternalLink, PieChart as PieChartIcon, BarChart as BarChartIcon, MessageSquare, UserPlus, CheckCircle2 } from 'lucide-react';
+import { Users, TrendingUp, Search, Filter, ExternalLink, PieChart as PieChartIcon, BarChart as BarChartIcon, MessageSquare, UserPlus, CheckCircle2, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
@@ -17,6 +17,8 @@ export default function LeadsDashboard() {
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
   const [addingToContacts, setAddingToContacts] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [clearingLeads, setClearingLeads] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
@@ -43,6 +45,23 @@ export default function LeadsDashboard() {
 
     return () => unsubscribeAuth();
   }, []);
+
+  const handleClearLeads = async () => {
+    if (!userId) return;
+    setClearingLeads(true);
+    try {
+      const q = query(collection(db, 'leads'), where('agentId', '==', userId));
+      const snapshot = await getDocs(q);
+      const batch = writeBatch(db);
+      snapshot.docs.forEach(doc => batch.delete(doc.ref));
+      await batch.commit();
+      setShowClearConfirm(false);
+    } catch (error) {
+      console.error('Error clearing leads:', error);
+    } finally {
+      setClearingLeads(false);
+    }
+  };
 
   const handleAddToContacts = async (lead: Lead) => {
     setAddingToContacts(lead.id);
@@ -115,7 +134,16 @@ export default function LeadsDashboard() {
               </motion.div>
             )}
           </AnimatePresence>
-          <button 
+          {leads.length > 0 && (
+            <button
+              onClick={() => setShowClearConfirm(true)}
+              className="flex items-center gap-2 px-5 py-3 bg-red-50 text-red-500 border border-red-200 rounded-full font-bold hover:bg-red-100 transition-all"
+            >
+              <Trash2 size={16} />
+              Clear All Leads
+            </button>
+          )}
+          <button
             onClick={() => setIsSimulatorOpen(true)}
             className="flex items-center gap-2 px-6 py-3 bg-[#25D366] text-white rounded-full font-bold shadow-lg hover:bg-[#128C7E] transition-all transform hover:scale-105"
           >
@@ -125,10 +153,51 @@ export default function LeadsDashboard() {
         </div>
       </div>
 
-      <WhatsAppSimulator 
-        isOpen={isSimulatorOpen} 
-        onClose={() => setIsSimulatorOpen(false)} 
+      <WhatsAppSimulator
+        isOpen={isSimulatorOpen}
+        onClose={() => setIsSimulatorOpen(false)}
       />
+
+      <AnimatePresence>
+        {showClearConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-3xl shadow-2xl p-8 max-w-sm w-full text-center space-y-6"
+            >
+              <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto">
+                <Trash2 className="w-7 h-7 text-red-500" />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-xl font-black text-midnight">Clear all leads?</h3>
+                <p className="text-charcoal/60 text-sm">This will permanently delete all {leads.length} leads. This action cannot be undone.</p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowClearConfirm(false)}
+                  className="flex-1 py-3 rounded-2xl border border-zinc-200 font-bold text-charcoal hover:bg-zinc-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleClearLeads}
+                  disabled={clearingLeads}
+                  className="flex-1 py-3 rounded-2xl bg-red-500 text-white font-bold hover:bg-red-600 transition-colors disabled:opacity-60"
+                >
+                  {clearingLeads ? 'Clearing...' : 'Yes, clear all'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div className="grid md:grid-cols-3 gap-6">
         <StatCard icon={<Users className="w-5 h-5" />} label="Total Leads" value={stats.total} color="midnight" />
