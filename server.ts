@@ -304,8 +304,14 @@ async function startServer() {
   // ── Document Signing Endpoint ──────────────────────────────────────────
   // Firestore writes are handled client-side; server only sends the notification email.
   app.post('/api/sign-document', async (req, res) => {
-    const { leadId, stepId, signerName, signerEmail, agentEmail, agentName, signature, stepTitle, docLabel, signedAt: clientSignedAt } = req.body;
-    if (!signature || !signerName || !agentEmail) {
+    const {
+      leadId, stepId, signerName, signerEmail, agentEmail, agentName,
+      signature, stepTitle, docLabel, signedAt: clientSignedAt,
+      // ID files: base64 content only — never written to disk or DB
+      idAttachments = [],
+    } = req.body;
+
+    if (!signerName || !agentEmail) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
@@ -317,58 +323,93 @@ async function startServer() {
 
       if (resendKey) {
         const resend = new Resend(resendKey);
-        const signatureBase64 = signature.replace(/^data:image\/png;base64,/, '');
         const signedDateStr = new Date(signedAt).toLocaleString('en-CA', { timeZone: 'America/Toronto', dateStyle: 'full', timeStyle: 'short' });
-        const signatureAttachment = {
-          filename: `${(docLabel || 'document').replace(/\s+/g, '_')}_signed.png`,
-          content: Buffer.from(signatureBase64, 'base64'),
-        };
 
-        // Attach PDF if one exists for this step
-        const attachments: { filename: string; content: Buffer }[] = [signatureAttachment];
+        // Build attachment list — nothing is persisted; all attachments exist only in-memory per request
+        const attachments: { filename: string; content: Buffer; contentType?: string }[] = [];
+
+        // Signature PNG (if step required a drawn signature)
+        if (signature) {
+          const signatureBase64 = signature.replace(/^data:image\/png;base64,/, '');
+          attachments.push({
+            filename: `${(docLabel || 'document').replace(/\s+/g, '_')}_signed.png`,
+            content: Buffer.from(signatureBase64, 'base64'),
+            contentType: 'image/png',
+          });
+        }
+
+        // PDF document (if one exists in public/documents/)
         if (stepId) {
           const pdfPath = path.join(process.cwd(), 'public', 'documents', `${stepId}.pdf`);
           if (fs.existsSync(pdfPath)) {
             attachments.push({
               filename: `${(docLabel || stepId).replace(/\s+/g, '_')}.pdf`,
               content: fs.readFileSync(pdfPath),
+              contentType: 'application/pdf',
             });
             console.log(`[Sign] Attaching PDF: ${pdfPath}`);
           }
         }
+
+        // ID documents — decoded from base64, attached to emails, never written to disk/DB
+        for (const idFile of idAttachments) {
+          if (idFile.content && idFile.filename) {
+            attachments.push({
+              filename: idFile.filename,
+              content: Buffer.from(idFile.content, 'base64'),
+              contentType: idFile.mimeType || 'application/octet-stream',
+            });
+          }
+        }
+        const hasIdFiles = idAttachments.length > 0;
+
+        const signatureBase64 = signature ? signature.replace(/^data:image\/png;base64,/, '') : null;
         const detailsTable = `
           <div style="background: #f9f9f9; border: 1px solid #e4e4e7; border-radius: 10px; padding: 20px; margin-bottom: 24px;">
             <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
               <tr><td style="color: #888; padding: 5px 0; width: 140px;">Document</td><td style="font-weight: 700;">${stepTitle}</td></tr>
               <tr><td style="color: #888; padding: 5px 0;">Form / Label</td><td style="font-weight: 700;">${docLabel}</td></tr>
-              <tr><td style="color: #888; padding: 5px 0;">Signed by</td><td style="font-weight: 700;">${signerName}</td></tr>
-              <tr><td style="color: #888; padding: 5px 0;">Signer email</td><td style="font-weight: 700;">${signerEmail || '—'}</td></tr>
-              <tr><td style="color: #888; padding: 5px 0;">Signed at</td><td style="font-weight: 700;">${signedDateStr} (Toronto)</td></tr>
+              <tr><td style="color: #888; padding: 5px 0;">${hasIdFiles ? 'Verified by' : 'Signed by'}</td><td style="font-weight: 700;">${signerName}</td></tr>
+              <tr><td style="color: #888; padding: 5px 0;">Email</td><td style="font-weight: 700;">${signerEmail || '—'}</td></tr>
+              <tr><td style="color: #888; padding: 5px 0;">${hasIdFiles ? 'Submitted at' : 'Signed at'}</td><td style="font-weight: 700;">${signedDateStr} (Toronto)</td></tr>
+              ${hasIdFiles ? `<tr><td style="color: #888; padding: 5px 0;">ID Files</td><td style="font-weight: 700; color: #D4A373;">${idAttachments.length} file(s) attached</td></tr>` : ''}
             </table>
           </div>`;
-        const signatureBlock = `
+        const signatureBlock = signatureBase64 ? `
           <p style="font-size: 14px; font-weight: 700; margin: 0 0 12px;">Electronic Signature:</p>
           <div style="border: 2px solid #e4e4e7; border-radius: 10px; padding: 20px; background: #fafafa; text-align: center; margin-bottom: 8px;">
             <img src="data:image/png;base64,${signatureBase64}" alt="Signature of ${signerName}" style="max-width: 100%; max-height: 120px;" />
           </div>
-          <p style="font-size: 11px; color: #aaa; margin: 0 0 28px; text-align: center;">Signature of ${signerName} — ${signedDateStr}</p>`;
+          <p style="font-size: 11px; color: #aaa; margin: 0 0 28px; text-align: center;">Signature of ${signerName} — ${signedDateStr}</p>` : '';
+        const idNotice = hasIdFiles ? `
+          <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 16px; margin-bottom: 24px;">
+            <p style="font-size: 13px; font-weight: 700; color: #1e40af; margin: 0 0 6px;">🪪 ID Documents Attached</p>
+            <p style="font-size: 12px; color: #1e3a8a; margin: 0;">The lead's government-issued ID (${idAttachments.length} file(s)) is attached to this email. These files were not stored in LeadCrest.</p>
+          </div>` : '';
 
-        // Email 1: TO lead — confirmation copy (no dashboard link)
+        const leadSubject = hasIdFiles
+          ? `Your FINTRAC verification has been submitted`
+          : `Your signed copy: "${stepTitle}"`;
+        const leadIntro = hasIdFiles
+          ? `This confirms that your identity documents have been securely forwarded to your agent for FINTRAC verification purposes. Your ID files are attached to this email for your records.`
+          : `This is your confirmation that you have successfully signed the following document. Your signed copy is attached to this email.`;
+
+        // Email 1: TO lead — confirmation copy (no dashboard link, ID not re-stored)
         if (signerEmail) {
           await resend.emails.send({
             from: 'LeadCrest <notifications@leistly.com>',
             to: signerEmail,
-            subject: `Your signed copy: "${stepTitle}"`,
+            subject: leadSubject,
             attachments,
             html: `
               <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #2d2d2d; background: #f5f0eb; padding: 32px 16px;">
                 <div style="background: #1E3A5F; padding: 24px 32px; border-radius: 12px 12px 0 0;">
                   <h1 style="color: #fff; margin: 0; font-size: 20px; font-weight: 900;">LEADCREST</h1>
-                  <p style="color: rgba(255,255,255,0.6); margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">Signed Document Confirmation</p>
+                  <p style="color: rgba(255,255,255,0.6); margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">${hasIdFiles ? 'FINTRAC Verification Confirmation' : 'Signed Document Confirmation'}</p>
                 </div>
                 <div style="background: #fff; padding: 32px; border: 1px solid #e4e4e7; border-top: none; border-radius: 0 0 12px 12px;">
                   <p style="font-size: 16px; margin: 0 0 8px;">Hi ${signerName?.split(' ')[0] || signerName},</p>
-                  <p style="font-size: 14px; color: #666; margin: 0 0 24px;">This is your confirmation that you have successfully signed the following document. Your signed copy is attached to this email.</p>
+                  <p style="font-size: 14px; color: #666; margin: 0 0 24px;">${leadIntro}</p>
                   ${detailsTable}
                   ${signatureBlock}
                   <p style="font-size: 11px; color: #ccc; margin-top: 16px;">Sent by LeadCrest · Electronic Commerce Act (Ontario) · Keep this email for your records.</p>
@@ -377,27 +418,35 @@ async function startServer() {
           });
         }
 
-        // Email 2: TO agent — signed copy with dashboard link
+        // Email 2: TO agent — all attachments including ID (email-only, not stored server-side)
+        const agentSubject = hasIdFiles
+          ? `🪪 ${signerName} submitted ID for FINTRAC verification`
+          : `✍️ ${signerName} signed "${stepTitle}"`;
         await resend.emails.send({
           from: 'LeadCrest <notifications@leistly.com>',
           to: agentEmail,
-          subject: `✍️ ${signerName} signed "${stepTitle}"`,
+          subject: agentSubject,
           attachments,
           html: `
             <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #2d2d2d; background: #f5f0eb; padding: 32px 16px;">
               <div style="background: #1E3A5F; padding: 24px 32px; border-radius: 12px 12px 0 0;">
                 <h1 style="color: #fff; margin: 0; font-size: 20px; font-weight: 900;">LEADCREST</h1>
-                <p style="color: rgba(255,255,255,0.6); margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">Document Signed</p>
+                <p style="color: rgba(255,255,255,0.6); margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">${hasIdFiles ? 'FINTRAC ID Received' : 'Document Signed'}</p>
               </div>
               <div style="background: #fff; padding: 32px; border: 1px solid #e4e4e7; border-top: none; border-radius: 0 0 12px 12px;">
                 <p style="font-size: 16px; margin: 0 0 8px;">Hi ${agentDisplayName},</p>
-                <p style="font-size: 14px; color: #666; margin: 0 0 24px;"><strong>${signerName}</strong> has reviewed and signed the following document. A confirmation copy has been sent to them at ${signerEmail || 'their email'}.</p>
+                <p style="font-size: 14px; color: #666; margin: 0 0 24px;">
+                  ${hasIdFiles
+                    ? `<strong>${signerName}</strong> has submitted their government-issued ID for FINTRAC identity verification. The ID file(s) are attached to this email only — they are not stored in LeadCrest.`
+                    : `<strong>${signerName}</strong> has reviewed and signed the following document. A confirmation copy has been sent to them at ${signerEmail || 'their email'}.`}
+                </p>
+                ${idNotice}
                 ${detailsTable}
                 ${signatureBlock}
                 <a href="${appUrl}/lead/${leadId}" style="display: inline-block; background: #D4A373; color: #fff; font-weight: 900; text-decoration: none; padding: 14px 28px; border-radius: 10px; font-size: 14px;">
                   View Lead in Dashboard →
                 </a>
-                <p style="font-size: 11px; color: #ccc; margin-top: 32px;">Sent by LeadCrest · Electronic Commerce Act (Ontario) · Signature PNG also attached.</p>
+                <p style="font-size: 11px; color: #ccc; margin-top: 32px;">Sent by LeadCrest · Electronic Commerce Act (Ontario)</p>
               </div>
             </div>`,
         });
