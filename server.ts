@@ -562,11 +562,18 @@ Rules:
         return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
       }
 
-      // Sanity check: complex OREA PDFs (e.g. BRA) sometimes produce a drastically
-      // smaller output when pdf-lib drops structures it doesn't understand.
-      // A result smaller than 70% of the input is a sign of silent corruption.
+      // Sanity check 1: output much smaller than input → pdf-lib dropped content
       if (filledBytes.length < pdfBytes.length * 0.70) {
         console.warn(`[Prefill] Output ${filledBytes.length}B vs input ${pdfBytes.length}B — likely corrupted, returning original`);
+        return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
+      }
+
+      // Sanity check 2: round-trip validation — if the saved bytes can't be
+      // loaded back, the PDF is structurally broken regardless of size
+      try {
+        await PDFDocument.load(filledBytes, { ignoreEncryption: true });
+      } catch {
+        console.warn('[Prefill] Round-trip validation failed, returning original');
         return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
       }
 

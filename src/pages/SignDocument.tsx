@@ -122,12 +122,19 @@ export default function SignDocument() {
             }),
           });
           if (prefillRes.ok) {
-            const { pdf } = await prefillRes.json();
-            setPrefillPdfBase64(pdf);
-            const blob = new Blob([Uint8Array.from(atob(pdf), c => c.charCodeAt(0))], { type: 'application/pdf' });
-            setPdfUrl(URL.createObjectURL(blob));
+            const { pdf, fieldsFilled } = await prefillRes.json();
+            if (fieldsFilled > 0) {
+              // pdf-lib successfully filled fields — use the processed PDF
+              setPrefillPdfBase64(pdf);
+              const bytes = new Uint8Array(atob(pdf).split('').map(c => c.charCodeAt(0)));
+              setPdfUrl(URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' })));
+            } else {
+              // pdf-lib returned the original unchanged (complex PDF it can't process)
+              // Show the original file directly — no blob URL encoding involved
+              setPdfUrl(resolvedPdfUrl);
+              // Leave prefillPdfBase64 null so sign endpoint reads the local file
+            }
           } else {
-            // Prefill failed — show original PDF
             setPdfUrl(resolvedPdfUrl);
           }
         } catch {
