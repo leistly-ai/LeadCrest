@@ -28,6 +28,9 @@ async function startServer() {
   app.use(express.json({ limit: '25mb' }));
   app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
+  // Serve public/ folder so PDFs at /documents/*.pdf are accessible in dev and prod
+  app.use(express.static(path.join(process.cwd(), 'public')));
+
   // Initialize Firebase Admin inside startServer and wrap in try-catch
   try {
     console.log('[Firebase Admin] Initializing with config:', JSON.stringify({
