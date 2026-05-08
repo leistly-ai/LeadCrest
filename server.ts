@@ -466,7 +466,7 @@ Return only the JSON object, no markdown, no explanation.`,
   // fields via pdf-lib, maps them to lead data using Gemini, and returns a
   // pre-filled PDF as base64. Unrecognised fields are left blank.
   app.post('/api/prefill-document', async (req, res) => {
-    const { pdfUrl, leadData, stepId } = req.body;
+    const { pdfUrl, leadData, agentData, stepId } = req.body;
     if (!pdfUrl && !stepId) return res.status(400).json({ error: 'pdfUrl or stepId required' });
 
     try {
@@ -503,16 +503,24 @@ Return only the JSON object, no markdown, no explanation.`,
       let fieldMap: Record<string, string> = {};
       try {
         const ai = getAI();
-        const prompt = `You are filling a PDF form for a real estate transaction.
+        const prompt = `You are filling a PDF form for a real estate transaction in Ontario, Canada.
 Here are the PDF form field names:
 ${JSON.stringify(fieldNames)}
 
-Here is the lead/client data available:
+Here is the lead/client data:
 ${JSON.stringify(leadData || {}, null, 2)}
 
-Return a JSON object mapping each field name to the best matching value from the lead data.
-For fields you cannot match, use an empty string "".
-Only return the JSON object, no explanation.`;
+Here is the agent/realtor data:
+${JSON.stringify(agentData || {}, null, 2)}
+
+Rules:
+- Map each field name to the best matching value from either the lead data or the agent data.
+- Fields referring to "buyer", "seller", "client", "signer" → use lead data.
+- Fields referring to "agent", "realtor", "salesperson", "brokerage", "representative" → use agent data.
+- Fields referring to "date", "today", "provided" → use today's date from agent data if provided.
+- Leave signature fields (containing the word "signature") as empty string "" — signatures will be embedded separately.
+- For fields you cannot match, use an empty string "".
+- Only return the JSON object, no explanation.`;
 
         const result = await generateWithFallback(ai, {
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -593,12 +601,68 @@ Only return the JSON object, no explanation.`;
           });
         }
 
-        // PDF document — prefer pre-filled version from client, fall back to local default
+        // PDF document — prefer pre-filled version from client, fall back to local default.
+        // When a drawn signature is provided, embed it into the PDF at the buyer signature field.
         const prefillPdf = req.body.prefillPdf;
         if (prefillPdf) {
+          let pdfBuffer = Buffer.from(prefillPdf, 'base64');
+
+          // Embed drawn signature into the PDF if one was provided
+          if (signature) {
+            try {
+              const { PDFDocument } = await import('pdf-lib');
+              const pdfDoc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
+              const sigBase64 = signature.replace(/^data:image\/png;base64,/, '');
+              const sigImage = await pdfDoc.embedPng(Buffer.from(sigBase64, 'base64'));
+
+              // Find buyer/client signature fields and draw the signature PNG at their location.
+              // We assume signature fields are on the last page (true for RECO and most OREA forms).
+              const pages = pdfDoc.getPages();
+              const lastPage = pages[pages.length - 1];
+              const form = pdfDoc.getForm();
+              let placed = false;
+
+              for (const field of form.getFields()) {
+                const name = field.getName().toLowerCase();
+                const isSigField =
+                  (name.includes('buyer') || name.includes('seller') || name.includes('client') || name.includes('signer')) &&
+                  name.includes('sig');
+                if (!isSigField) continue;
+
+                const widgets = (field as any).acroField.getWidgets();
+                if (!widgets.length) continue;
+                const rect = widgets[0].getRectangle();
+                const dims = sigImage.scaleToFit(
+                  Math.max(rect.width - 6, 10),
+                  Math.max(rect.height - 6, 10),
+                );
+                lastPage.drawImage(sigImage, {
+                  x: rect.x + 3,
+                  y: rect.y + (rect.height - dims.height) / 2,
+                  width: dims.width,
+                  height: dims.height,
+                });
+                placed = true;
+                break; // place in the first matching field only
+              }
+
+              if (!placed) {
+                // Fallback: bottom-left of last page — safe position for most OREA forms
+                const dims = sigImage.scaleToFit(200, 55);
+                lastPage.drawImage(sigImage, { x: 52, y: 128, width: dims.width, height: dims.height });
+              }
+
+              form.flatten();
+              pdfBuffer = Buffer.from(await pdfDoc.save());
+              console.log(`[Sign] Signature embedded in PDF, placed=${placed}`);
+            } catch (embedErr) {
+              console.warn('[Sign] Could not embed signature in PDF:', embedErr);
+            }
+          }
+
           attachments.push({
             filename: `${(docLabel || stepId || 'document').replace(/\s+/g, '_')}.pdf`,
-            content: Buffer.from(prefillPdf, 'base64'),
+            content: pdfBuffer,
             contentType: 'application/pdf',
           });
           console.log(`[Sign] Attaching pre-filled PDF for stepId=${stepId}`);

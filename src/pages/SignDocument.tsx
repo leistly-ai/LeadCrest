@@ -32,6 +32,7 @@ export default function SignDocument() {
   const [leadEmail, setLeadEmail] = useState('');
   const [agentEmail, setAgentEmail] = useState('');
   const [agentName, setAgentName] = useState('');
+  const [agentBrokerage, setAgentBrokerage] = useState('');
   const [loadingLead, setLoadingLead] = useState(true);
   const [alreadySigned, setAlreadySigned] = useState(false);
 
@@ -67,13 +68,20 @@ export default function SignDocument() {
       if ((data.signatures || {})[stepId]) setAlreadySigned(true);
 
       let resolvedPdfUrl: string | null = null;
+      let resolvedAgentInfo = { name: '', email: '', brokerage: '' };
       if (aid) {
         const agentDoc = await getDoc(doc(db, 'agents', aid));
         if (agentDoc.exists()) {
-          const agentData = agentDoc.data();
-          setAgentEmail(agentData.email || '');
-          setAgentName(agentData.name || '');
-          const customDoc = agentData.documents?.[stepId];
+          const agentDocData = agentDoc.data();
+          setAgentEmail(agentDocData.email || '');
+          setAgentName(agentDocData.name || '');
+          setAgentBrokerage(agentDocData.brokerage || agentDocData.brokerageName || '');
+          resolvedAgentInfo = {
+            name: agentDocData.name || '',
+            email: agentDocData.email || '',
+            brokerage: agentDocData.brokerage || agentDocData.brokerageName || '',
+          };
+          const customDoc = agentDocData.documents?.[stepId];
           resolvedPdfUrl = customDoc?.url || null;
         }
       }
@@ -106,6 +114,10 @@ export default function SignDocument() {
                 type: data.type,
                 employer: data.employmentInfo?.company,
                 salary: data.employmentInfo?.salary,
+              },
+              agentData: {
+                ...resolvedAgentInfo,
+                date: new Date().toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' }),
               },
             }),
           });
