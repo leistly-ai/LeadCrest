@@ -19,6 +19,9 @@ console.log('Starting server.ts...');
 const prefilledPdfCache = new Map<string, { pdf: string; fieldsFilled: number; cachedAt: number }>();
 const PREFILL_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+// Dedup map — prevents concurrent requests for the same key from all running Gemini
+const prefillInFlight = new Map<string, Promise<{ pdf: string; fieldsFilled: number }>>();
+
 // In-memory session store
 const sessions = new Map<string, any>();
 const lastRequests: any[] = [];
@@ -474,7 +477,7 @@ Return only the JSON object, no markdown, no explanation.`,
     const { pdfUrl, leadData, agentData, stepId, cacheKey } = req.body;
     if (!pdfUrl && !stepId) return res.status(400).json({ error: 'pdfUrl or stepId required' });
 
-    // Cache hit — return instantly, no Gemini call needed
+    // Cache hit — return instantly, no processing needed
     if (cacheKey) {
       const cached = prefilledPdfCache.get(cacheKey);
       if (cached && Date.now() - cached.cachedAt < PREFILL_CACHE_TTL_MS) {
@@ -483,7 +486,18 @@ Return only the JSON object, no markdown, no explanation.`,
       }
     }
 
-    try {
+    // Dedup — if this exact key is already being processed, wait for that promise
+    if (cacheKey && prefillInFlight.has(cacheKey)) {
+      console.log(`[Prefill] Dedup HIT for ${cacheKey} — waiting for in-flight request`);
+      try {
+        const result = await prefillInFlight.get(cacheKey)!;
+        return res.json(result);
+      } catch {
+        // If in-flight failed, fall through to process again
+      }
+    }
+
+    const processPromise = (async (): Promise<{ pdf: string; fieldsFilled: number }> => {
       const { PDFDocument } = await import('pdf-lib');
 
       // 1. Fetch the PDF bytes
@@ -493,38 +507,42 @@ Return only the JSON object, no markdown, no explanation.`,
         if (!fetchRes.ok) throw new Error(`Could not fetch PDF: ${fetchRes.status}`);
         pdfBytes = Buffer.from(await fetchRes.arrayBuffer());
       } else {
-        // Local default
         const localId = stepId || pdfUrl?.replace(/^\/documents\//, '').replace(/\.pdf$/, '');
         const localPath = path.join(process.cwd(), 'public', 'documents', `${localId}.pdf`);
-        if (!fs.existsSync(localPath)) {
-          return res.status(404).json({ error: `No PDF found for step: ${localId}` });
-        }
+        if (!fs.existsSync(localPath)) throw new Error(`No PDF found for step: ${localId}`);
         pdfBytes = fs.readFileSync(localPath);
       }
 
-      // 2. Load PDF and detect AcroForm fields
+      // 2. XFA detection — two methods for reliability:
+      //    a) raw bytes search (fast, catches all XFA variants)
+      //    b) pdf-lib catalog lookup (structured, catches hybrid XFA)
+      const rawXfa = pdfBytes.includes(Buffer.from('/XFA')) || pdfBytes.includes(Buffer.from('<XFA:'));
+      if (rawXfa) {
+        console.warn(`[Prefill] XFA form detected (raw bytes) for stepId=${stepId} — returning original`);
+        const originalBase64 = pdfBytes.toString('base64');
+        return { pdf: originalBase64, fieldsFilled: 0 };
+      }
+
       const { PDFName } = await import('pdf-lib');
       const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
 
-      // Detect XFA forms — pdf-lib strips XFA data on save, corrupting the PDF.
-      // Return the original immediately if XFA is present.
       try {
         const acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
         if (acroFormRef) {
           const acroForm = pdfDoc.context.lookup(acroFormRef) as any;
           if (acroForm?.get?.(PDFName.of('XFA'))) {
-            console.warn(`[Prefill] XFA form detected for stepId=${stepId} — returning original`);
-            return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
+            console.warn(`[Prefill] XFA form detected (catalog) for stepId=${stepId} — returning original`);
+            return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
           }
         }
-      } catch { /* continue — XFA check is best-effort */ }
+      } catch { /* non-critical — continue with normal fill */ }
 
       const form = pdfDoc.getForm();
       const fields = form.getFields();
       const fieldNames = fields.map(f => f.getName());
 
       if (fieldNames.length === 0) {
-        return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
+        return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
       }
 
       // 3. Ask Gemini to map field names → lead data values
@@ -575,48 +593,51 @@ Rules:
             (field as any).check();
             filled++;
           }
-        } catch {
-          // Skip fields that can't be set
-        }
+        } catch { /* skip unwritable fields */ }
       }
 
-      // Do NOT flatten here — keep form fields alive so the sign endpoint
-      // can locate the buyer signature field and draw the signature into it.
+      // Do NOT flatten — keep form fields alive so the sign endpoint can embed the signature
       let filledBytes: Uint8Array;
       try {
         filledBytes = await pdfDoc.save({ useObjectStreams: false });
       } catch (saveErr) {
         console.warn('[Prefill] pdfDoc.save() failed, returning original:', saveErr);
-        return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
+        return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
       }
 
-      // Sanity check 1: output much smaller than input → pdf-lib dropped content
+      // Sanity check: output much smaller than input → pdf-lib likely dropped content
       if (filledBytes.length < pdfBytes.length * 0.70) {
         console.warn(`[Prefill] Output ${filledBytes.length}B vs input ${pdfBytes.length}B — likely corrupted, returning original`);
-        return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
+        return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
       }
 
-      // Sanity check 2: round-trip validation — if the saved bytes can't be
-      // loaded back, the PDF is structurally broken regardless of size
+      // Round-trip validation
       try {
         await PDFDocument.load(filledBytes, { ignoreEncryption: true });
       } catch {
         console.warn('[Prefill] Round-trip validation failed, returning original');
-        return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
+        return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
       }
 
       const resultPdf = Buffer.from(filledBytes).toString('base64');
       console.log(`[Prefill] stepId=${stepId} fields=${fieldNames.length} filled=${filled}`);
+      return { pdf: resultPdf, fieldsFilled: filled };
+    })();
 
-      // Store in cache so subsequent requests are instant
+    // Register in-flight promise for dedup, clean up when done
+    if (cacheKey) prefillInFlight.set(cacheKey, processPromise);
+
+    try {
+      const result = await processPromise;
+
+      // Cache the result (including XFA/fallback results with fieldsFilled=0)
       if (cacheKey) {
-        prefilledPdfCache.set(cacheKey, { pdf: resultPdf, fieldsFilled: filled, cachedAt: Date.now() });
-        console.log(`[Prefill] Cached result for ${cacheKey}`);
+        prefilledPdfCache.set(cacheKey, { ...result, cachedAt: Date.now() });
+        console.log(`[Prefill] Cached result for ${cacheKey} (fieldsFilled=${result.fieldsFilled})`);
       }
 
-      return res.json({ pdf: resultPdf, fieldsFilled: filled });
+      return res.json(result);
     } catch (error: any) {
-      // Any unexpected failure — return the original PDF so the lead can still see it
       console.error('[Prefill] Error, returning original PDF:', error);
       try {
         const localPath = path.join(process.cwd(), 'public', 'documents', `${stepId}.pdf`);
@@ -626,6 +647,8 @@ Rules:
         }
       } catch { /* nothing we can do */ }
       res.status(500).json({ error: error.message || 'Failed to prefill PDF' });
+    } finally {
+      if (cacheKey) prefillInFlight.delete(cacheKey);
     }
   });
 

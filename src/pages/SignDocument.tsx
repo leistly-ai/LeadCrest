@@ -52,10 +52,14 @@ export default function SignDocument() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const prefillFiredRef = useRef(false);
   const step = stepId ? STEP_MAP[stepId] : null;
 
   useEffect(() => {
     if (!leadId || !stepId) return;
+    // Prevent double-fire from React StrictMode in development
+    if (prefillFiredRef.current) return;
+    prefillFiredRef.current = true;
     const load = async () => {
       const leadDoc = await getDoc(doc(db, 'leads', leadId));
       if (!leadDoc.exists()) { setLoadingLead(false); return; }
