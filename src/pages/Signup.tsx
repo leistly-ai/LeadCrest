@@ -4,7 +4,7 @@ import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { User, Mail, Lock, Phone, ArrowRight, ShieldCheck, KeyRound, CheckCircle2 } from 'lucide-react';
+import { User, Mail, Lock, Phone, ArrowRight, ShieldCheck, KeyRound, Building2 } from 'lucide-react';
 
 type SignupStep = 'details' | 'verification';
 
@@ -13,6 +13,7 @@ export default function Signup() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [brokerage, setBrokerage] = useState('');
   const [password, setPassword] = useState('');
   const [emailOtp, setEmailOtp] = useState('');
   const [phoneOtp, setPhoneOtp] = useState('');
@@ -20,7 +21,14 @@ export default function Signup() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const createAgentDoc = async (user: any, agentName: string, agentEmail: string, agentPhone: string, tier: string) => {
+  const createAgentDoc = async (
+    user: any,
+    agentName: string,
+    agentEmail: string,
+    agentPhone: string,
+    tier: string,
+    agentBrokerage = '',
+  ) => {
     const trialEndDate = new Date();
     trialEndDate.setDate(trialEndDate.getDate() + 30);
 
@@ -29,6 +37,7 @@ export default function Signup() {
       name: agentName,
       email: agentEmail,
       phone: agentPhone,
+      ...(agentBrokerage ? { brokerage: agentBrokerage } : {}),
       subscriptionTier: tier,
       trialEndDate: trialEndDate.toISOString(),
       isOnboarded: false,
@@ -42,10 +51,9 @@ export default function Signup() {
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    
+
     if (step === 'details') {
       setLoading(true);
-      // Simulate sending OTPs
       setTimeout(() => {
         setStep('verification');
         setLoading(false);
@@ -62,10 +70,8 @@ export default function Signup() {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
-
       await updateProfile(user, { displayName: name });
-      await createAgentDoc(user, name, email, phone, 'free');
-
+      await createAgentDoc(user, name, email, phone, 'free', brokerage);
       navigate('/pricing');
     } catch (err: any) {
       console.error('Signup error:', err);
@@ -87,7 +93,6 @@ export default function Signup() {
       const result = await signInWithPopup(auth, provider);
       const user = result.user;
 
-      // Check if agent doc already exists
       const agentDoc = await getDoc(doc(db, 'agents', user.uid));
       if (!agentDoc.exists()) {
         await createAgentDoc(user, user.displayName || 'New Agent', user.email || '', '', 'free');
@@ -120,7 +125,7 @@ export default function Signup() {
             {step === 'details' ? 'Create Agent Account' : 'Verify Identity'}
           </h1>
           <p className="text-charcoal opacity-80">
-            {step === 'details' 
+            {step === 'details'
               ? 'Use any email address to start your 30-day free trial.'
               : `We've sent verification codes to ${email} and ${phone}.`}
           </p>
@@ -174,6 +179,20 @@ export default function Signup() {
                   onChange={(e) => setPhone(e.target.value)}
                   className="input-field"
                   placeholder="+1 (555) 000-0000"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-charcoal flex items-center gap-2">
+                  <Building2 className="w-4 h-4 text-midnight" /> Brokerage Name
+                  <span className="text-[10px] text-charcoal/40 font-normal uppercase tracking-widest ml-1">Optional</span>
+                </label>
+                <input
+                  type="text"
+                  value={brokerage}
+                  onChange={(e) => setBrokerage(e.target.value)}
+                  className="input-field"
+                  placeholder="e.g. RE/MAX, Royal LePage"
                 />
               </div>
 

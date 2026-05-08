@@ -552,14 +552,30 @@ Rules:
         }
       }
 
-      // Flatten to prevent further editing
-      form.flatten();
+      // Flatten — some complex OREA PDFs reject flatten; skip it if it throws
+      try { form.flatten(); } catch { /* leave interactive, still display correctly */ }
 
-      const filledBytes = await pdfDoc.save();
+      let filledBytes: Uint8Array;
+      try {
+        filledBytes = await pdfDoc.save();
+      } catch (saveErr) {
+        // pdf-lib couldn't re-serialise this PDF — return original bytes unchanged
+        console.warn('[Prefill] pdfDoc.save() failed, returning original:', saveErr);
+        return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
+      }
+
       console.log(`[Prefill] stepId=${stepId} fields=${fieldNames.length} filled=${filled}`);
       return res.json({ pdf: Buffer.from(filledBytes).toString('base64'), fieldsFilled: filled });
     } catch (error: any) {
-      console.error('[Prefill] Error:', error);
+      // Any unexpected failure — return the original PDF so the lead can still see it
+      console.error('[Prefill] Error, returning original PDF:', error);
+      try {
+        const localPath = path.join(process.cwd(), 'public', 'documents', `${stepId}.pdf`);
+        if (stepId && fs.existsSync(localPath)) {
+          const original = fs.readFileSync(localPath);
+          return res.json({ pdf: original.toString('base64'), fieldsFilled: 0 });
+        }
+      } catch { /* nothing we can do */ }
       res.status(500).json({ error: error.message || 'Failed to prefill PDF' });
     }
   });

@@ -5,7 +5,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { Agent } from '../types';
 import { motion } from 'motion/react';
-import { User, Mail, Phone, FileText, MapPin, Home, Save, AlertCircle, ShieldCheck, Trash2, RefreshCw } from 'lucide-react';
+import { User, Mail, Phone, MapPin, Home, Save, AlertCircle, Trash2, RefreshCw, Building2 } from 'lucide-react';
 import { handleFirestoreError, OperationType } from '../utils/firestore-errors';
 import AgentDocuments from '../components/AgentDocuments';
 
@@ -25,6 +25,7 @@ export default function Profile() {
   const [submitting, setSubmitting] = useState(false);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  const [brokerage, setBrokerage] = useState('');
   const [selectedCities, setSelectedCities] = useState<string[]>([]);
   const [selectedPropertyTypes, setSelectedPropertyTypes] = useState<string[]>([]);
   const [message, setMessage] = useState({ type: '', text: '' });
@@ -41,6 +42,7 @@ export default function Profile() {
             setAgent(data);
             setName(data.name);
             setPhone(data.phone);
+            setBrokerage(data.brokerage || '');
             setSelectedCities(data.specializedCities || []);
             setSelectedPropertyTypes(data.propertyTypes || []);
             setAgentDocuments(data.documents || {});
@@ -67,6 +69,7 @@ export default function Profile() {
       await updateDoc(doc(db, 'agents', agent.uid), {
         name,
         phone,
+        brokerage,
         specializedCities: selectedCities,
         propertyTypes: selectedPropertyTypes,
       });
@@ -158,6 +161,18 @@ export default function Profile() {
                   required
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-charcoal/60 uppercase tracking-widest flex items-center gap-2">
+                  <Building2 className="w-4 h-4 text-honey" /> Brokerage Name
+                </label>
+                <input
+                  type="text"
+                  value={brokerage}
+                  onChange={(e) => setBrokerage(e.target.value)}
+                  placeholder="e.g. RE/MAX, Royal LePage"
                   className="input-field"
                 />
               </div>

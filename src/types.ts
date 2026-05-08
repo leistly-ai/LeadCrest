@@ -9,6 +9,7 @@ export interface Agent {
   trialEndDate: string;
   qrCodeUrl?: string;
   licenseNumber?: string;
+  brokerage?: string;
   specializedCities?: string[];
   propertyTypes?: string[];
   isOnboarded: boolean;
