@@ -70,8 +70,7 @@ export default function SignDocument() {
       let resolvedPdfUrl: string | null = null;
       let resolvedAgentInfo = { name: '', email: '', brokerage: '' };
 
-      // Check for a pre-filled PDF cached at email-send time (instant load, no Gemini call)
-      const cachedPrefillUrl: string | null = data.prefilledDocs?.[stepId] || null;
+      // cacheKey matches what TransactionPipeline stored when sending the email
 
       if (aid) {
         const agentDoc = await getDoc(doc(db, 'agents', aid));
@@ -98,18 +97,7 @@ export default function SignDocument() {
         } catch { /* no default PDF */ }
       }
 
-      // If a cached pre-filled PDF exists, use it instantly — no prefill needed
-      if (cachedPrefillUrl) {
-        setPdfUrl(cachedPrefillUrl);
-        // Still need base64 for signature embedding at submit time — fetch it
-        try {
-          const r = await fetch(cachedPrefillUrl);
-          const buf = await r.arrayBuffer();
-          const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-          setPrefillPdfBase64(b64);
-        } catch { /* sign endpoint will fall back to local file */ }
-      } else if (resolvedPdfUrl) {
-        // No cache yet — run prefill on demand
+      if (resolvedPdfUrl) {
         setPrefilling(true);
         try {
           const prefillRes = await fetch('/api/prefill-document', {
@@ -118,15 +106,13 @@ export default function SignDocument() {
             body: JSON.stringify({
               pdfUrl: resolvedPdfUrl.startsWith('http') ? resolvedPdfUrl : null,
               stepId: resolvedPdfUrl.startsWith('http') ? null : stepId,
+              // Pass cache key — server returns instantly on a hit (email was already sent)
+              cacheKey: `${leadId}:${stepId}`,
               leadData: {
                 name, email,
-                phone: data.phone,
-                address: data.currentAddress,
-                budget: data.budget,
-                timeline: data.timeline,
-                type: data.type,
-                employer: data.employmentInfo?.company,
-                salary: data.employmentInfo?.salary,
+                phone: data.phone, address: data.currentAddress,
+                budget: data.budget, timeline: data.timeline, type: data.type,
+                employer: data.employmentInfo?.company, salary: data.employmentInfo?.salary,
               },
               agentData: {
                 ...resolvedAgentInfo,

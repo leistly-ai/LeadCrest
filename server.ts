@@ -14,6 +14,11 @@ let adminDb: any = null;
 
 console.log('Starting server.ts...');
 
+// In-memory prefill cache — keyed by "leadId:stepId"
+// Populated when agent sends email; consumed when lead opens signing link
+const prefilledPdfCache = new Map<string, { pdf: string; fieldsFilled: number; cachedAt: number }>();
+const PREFILL_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
 // In-memory session store
 const sessions = new Map<string, any>();
 const lastRequests: any[] = [];
@@ -466,8 +471,17 @@ Return only the JSON object, no markdown, no explanation.`,
   // fields via pdf-lib, maps them to lead data using Gemini, and returns a
   // pre-filled PDF as base64. Unrecognised fields are left blank.
   app.post('/api/prefill-document', async (req, res) => {
-    const { pdfUrl, leadData, agentData, stepId } = req.body;
+    const { pdfUrl, leadData, agentData, stepId, cacheKey } = req.body;
     if (!pdfUrl && !stepId) return res.status(400).json({ error: 'pdfUrl or stepId required' });
+
+    // Cache hit — return instantly, no Gemini call needed
+    if (cacheKey) {
+      const cached = prefilledPdfCache.get(cacheKey);
+      if (cached && Date.now() - cached.cachedAt < PREFILL_CACHE_TTL_MS) {
+        console.log(`[Prefill] Cache HIT for ${cacheKey}`);
+        return res.json({ pdf: cached.pdf, fieldsFilled: cached.fieldsFilled });
+      }
+    }
 
     try {
       const { PDFDocument } = await import('pdf-lib');
@@ -591,8 +605,16 @@ Rules:
         return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
       }
 
+      const resultPdf = Buffer.from(filledBytes).toString('base64');
       console.log(`[Prefill] stepId=${stepId} fields=${fieldNames.length} filled=${filled}`);
-      return res.json({ pdf: Buffer.from(filledBytes).toString('base64'), fieldsFilled: filled });
+
+      // Store in cache so subsequent requests are instant
+      if (cacheKey) {
+        prefilledPdfCache.set(cacheKey, { pdf: resultPdf, fieldsFilled: filled, cachedAt: Date.now() });
+        console.log(`[Prefill] Cached result for ${cacheKey}`);
+      }
+
+      return res.json({ pdf: resultPdf, fieldsFilled: filled });
     } catch (error: any) {
       // Any unexpected failure — return the original PDF so the lead can still see it
       console.error('[Prefill] Error, returning original PDF:', error);
