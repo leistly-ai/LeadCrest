@@ -461,6 +461,101 @@ Return only the JSON object, no markdown, no explanation.`,
     }
   });
 
+  // ── Document Prefill Endpoint ──────────────────────────────────────────
+  // Fetches a PDF (from Firebase Storage URL or local default), detects AcroForm
+  // fields via pdf-lib, maps them to lead data using Gemini, and returns a
+  // pre-filled PDF as base64. Unrecognised fields are left blank.
+  app.post('/api/prefill-document', async (req, res) => {
+    const { pdfUrl, leadData, stepId } = req.body;
+    if (!pdfUrl && !stepId) return res.status(400).json({ error: 'pdfUrl or stepId required' });
+
+    try {
+      const { PDFDocument } = await import('pdf-lib');
+
+      // 1. Fetch the PDF bytes
+      let pdfBytes: Buffer;
+      if (pdfUrl && (pdfUrl.startsWith('http://') || pdfUrl.startsWith('https://'))) {
+        const fetchRes = await fetch(pdfUrl);
+        if (!fetchRes.ok) throw new Error(`Could not fetch PDF: ${fetchRes.status}`);
+        pdfBytes = Buffer.from(await fetchRes.arrayBuffer());
+      } else {
+        // Local default
+        const localId = stepId || pdfUrl?.replace(/^\/documents\//, '').replace(/\.pdf$/, '');
+        const localPath = path.join(process.cwd(), 'public', 'documents', `${localId}.pdf`);
+        if (!fs.existsSync(localPath)) {
+          return res.status(404).json({ error: `No PDF found for step: ${localId}` });
+        }
+        pdfBytes = fs.readFileSync(localPath);
+      }
+
+      // 2. Load PDF and detect AcroForm fields
+      const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+      const form = pdfDoc.getForm();
+      const fields = form.getFields();
+      const fieldNames = fields.map(f => f.getName());
+
+      if (fieldNames.length === 0) {
+        // No form fields — return original PDF as-is
+        return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
+      }
+
+      // 3. Ask Gemini to map field names → lead data values
+      let fieldMap: Record<string, string> = {};
+      try {
+        const ai = getAI();
+        const prompt = `You are filling a PDF form for a real estate transaction.
+Here are the PDF form field names:
+${JSON.stringify(fieldNames)}
+
+Here is the lead/client data available:
+${JSON.stringify(leadData || {}, null, 2)}
+
+Return a JSON object mapping each field name to the best matching value from the lead data.
+For fields you cannot match, use an empty string "".
+Only return the JSON object, no explanation.`;
+
+        const result = await generateWithFallback(ai, {
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        });
+        const raw = (result.text || '').trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
+        fieldMap = JSON.parse(raw);
+      } catch (geminiErr) {
+        console.warn('[Prefill] Gemini mapping failed, leaving fields blank:', geminiErr);
+        fieldMap = {};
+      }
+
+      // 4. Fill the fields
+      let filled = 0;
+      for (const field of fields) {
+        const name = field.getName();
+        const value = fieldMap[name];
+        if (!value) continue;
+        try {
+          const fieldType = field.constructor.name;
+          if (fieldType === 'PDFTextField') {
+            (field as any).setText(String(value));
+            filled++;
+          } else if (fieldType === 'PDFCheckBox' && (value === 'true' || value === 'yes' || value === '1')) {
+            (field as any).check();
+            filled++;
+          }
+        } catch {
+          // Skip fields that can't be set
+        }
+      }
+
+      // Flatten to prevent further editing
+      form.flatten();
+
+      const filledBytes = await pdfDoc.save();
+      console.log(`[Prefill] stepId=${stepId} fields=${fieldNames.length} filled=${filled}`);
+      return res.json({ pdf: Buffer.from(filledBytes).toString('base64'), fieldsFilled: filled });
+    } catch (error: any) {
+      console.error('[Prefill] Error:', error);
+      res.status(500).json({ error: error.message || 'Failed to prefill PDF' });
+    }
+  });
+
   // ── Document Signing Endpoint ──────────────────────────────────────────
   // Firestore writes are handled client-side; server only sends the notification email.
   app.post('/api/sign-document', async (req, res) => {
@@ -498,8 +593,16 @@ Return only the JSON object, no markdown, no explanation.`,
           });
         }
 
-        // PDF document (if one exists in public/documents/)
-        if (stepId) {
+        // PDF document — prefer pre-filled version from client, fall back to local default
+        const prefillPdf = req.body.prefillPdf;
+        if (prefillPdf) {
+          attachments.push({
+            filename: `${(docLabel || stepId || 'document').replace(/\s+/g, '_')}.pdf`,
+            content: Buffer.from(prefillPdf, 'base64'),
+            contentType: 'application/pdf',
+          });
+          console.log(`[Sign] Attaching pre-filled PDF for stepId=${stepId}`);
+        } else if (stepId) {
           const pdfPath = path.join(process.cwd(), 'public', 'documents', `${stepId}.pdf`);
           if (fs.existsSync(pdfPath)) {
             attachments.push({
@@ -507,7 +610,7 @@ Return only the JSON object, no markdown, no explanation.`,
               content: fs.readFileSync(pdfPath),
               contentType: 'application/pdf',
             });
-            console.log(`[Sign] Attaching PDF: ${pdfPath}`);
+            console.log(`[Sign] Attaching default PDF: ${pdfPath}`);
           }
         }
 

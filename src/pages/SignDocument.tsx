@@ -5,7 +5,7 @@ import { db } from '../firebase';
 import { STEP_MAP } from '../data/pipelineSteps';
 import {
   CheckCircle2, PenLine, RotateCcw, ChevronUp, Network,
-  AlertTriangle, ArrowRight, ArrowLeft, Upload, X, FileImage, ShieldCheck,
+  AlertTriangle, ArrowRight, ArrowLeft, Upload, X, FileImage, ShieldCheck, Loader2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -42,6 +42,8 @@ export default function SignDocument() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [prefilling, setPrefilling] = useState(false);
+  const [prefillPdfBase64, setPrefillPdfBase64] = useState<string | null>(null);
 
   // ID upload state (FINTRAC step only — never persisted to DB)
   const [idFiles, setIdFiles] = useState<IdFile[]>([]);
@@ -51,33 +53,78 @@ export default function SignDocument() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const step = stepId ? STEP_MAP[stepId] : null;
 
-  // Check if a PDF exists for this step
-  useEffect(() => {
-    if (!stepId) return;
-    const url = `/documents/${stepId}.pdf`;
-    fetch(url, { method: 'HEAD' }).then(r => {
-      if (r.ok) setPdfUrl(url);
-    }).catch(() => {});
-  }, [stepId]);
-
   useEffect(() => {
     if (!leadId || !stepId) return;
     const load = async () => {
       const leadDoc = await getDoc(doc(db, 'leads', leadId));
       if (!leadDoc.exists()) { setLoadingLead(false); return; }
       const data = leadDoc.data();
-      setLeadName(data.name || '');
-      setLeadEmail(data.email || '');
+      const name = data.name || '';
+      const email = data.email || '';
+      setLeadName(name);
+      setLeadEmail(email);
       const aid = data.agentId || '';
       if ((data.signatures || {})[stepId]) setAlreadySigned(true);
 
+      let resolvedPdfUrl: string | null = null;
       if (aid) {
         const agentDoc = await getDoc(doc(db, 'agents', aid));
         if (agentDoc.exists()) {
-          setAgentEmail(agentDoc.data().email || '');
-          setAgentName(agentDoc.data().name || '');
+          const agentData = agentDoc.data();
+          setAgentEmail(agentData.email || '');
+          setAgentName(agentData.name || '');
+          const customDoc = agentData.documents?.[stepId];
+          resolvedPdfUrl = customDoc?.url || null;
         }
       }
+
+      // Fall back to default local PDF if no custom doc
+      if (!resolvedPdfUrl) {
+        const defaultUrl = `/documents/${stepId}.pdf`;
+        try {
+          const r = await fetch(defaultUrl, { method: 'HEAD' });
+          if (r.ok) resolvedPdfUrl = defaultUrl;
+        } catch { /* no default PDF */ }
+      }
+
+      // Pre-fill the PDF with lead data
+      if (resolvedPdfUrl) {
+        setPrefilling(true);
+        try {
+          const prefillRes = await fetch('/api/prefill-document', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              pdfUrl: resolvedPdfUrl.startsWith('http') ? resolvedPdfUrl : null,
+              stepId: resolvedPdfUrl.startsWith('http') ? null : stepId,
+              leadData: {
+                name, email,
+                phone: data.phone,
+                address: data.currentAddress,
+                budget: data.budget,
+                timeline: data.timeline,
+                type: data.type,
+                employer: data.employmentInfo?.company,
+                salary: data.employmentInfo?.salary,
+              },
+            }),
+          });
+          if (prefillRes.ok) {
+            const { pdf } = await prefillRes.json();
+            setPrefillPdfBase64(pdf);
+            const blob = new Blob([Uint8Array.from(atob(pdf), c => c.charCodeAt(0))], { type: 'application/pdf' });
+            setPdfUrl(URL.createObjectURL(blob));
+          } else {
+            // Prefill failed — show original PDF
+            setPdfUrl(resolvedPdfUrl);
+          }
+        } catch {
+          setPdfUrl(resolvedPdfUrl);
+        } finally {
+          setPrefilling(false);
+        }
+      }
+
       setLoadingLead(false);
     };
     load();
@@ -232,6 +279,8 @@ export default function SignDocument() {
             content: f.dataUrl.split(',')[1], // base64 only
             mimeType: f.mimeType,
           })),
+          // Pre-filled PDF (base64) — replaces static file attachment
+          prefillPdf: prefillPdfBase64 || null,
         }),
       });
 
@@ -335,7 +384,14 @@ export default function SignDocument() {
           </div>
 
           {/* PDF viewer if available, otherwise text summary */}
-          {pdfUrl ? (
+          {prefilling ? (
+            <div className="rounded-2xl border border-zinc-200 bg-zinc-50 flex items-center justify-center" style={{ height: '360px' }}>
+              <div className="flex flex-col items-center gap-3 text-charcoal/40">
+                <Loader2 className="w-8 h-8 animate-spin" />
+                <p className="text-xs font-bold uppercase tracking-widest">Preparing document…</p>
+              </div>
+            </div>
+          ) : pdfUrl ? (
             <div className="rounded-2xl overflow-hidden border border-zinc-200">
               <iframe src={pdfUrl} title={step.title} className="w-full" style={{ height: '360px', border: 'none' }} />
             </div>
@@ -583,7 +639,14 @@ export default function SignDocument() {
           </div>
 
           {/* PDF or text summary */}
-          {pdfUrl ? (
+          {prefilling ? (
+            <div className="bg-zinc-50 border-b border-zinc-100 flex items-center justify-center" style={{ height: '380px' }}>
+              <div className="flex flex-col items-center gap-3 text-charcoal/40">
+                <Loader2 className="w-8 h-8 animate-spin" />
+                <p className="text-xs font-bold uppercase tracking-widest">Preparing document…</p>
+              </div>
+            </div>
+          ) : pdfUrl ? (
             <div className="bg-zinc-50 border-b border-zinc-100">
               <iframe src={pdfUrl} title={step.title} className="w-full" style={{ height: '380px', border: 'none' }} />
             </div>

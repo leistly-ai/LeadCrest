@@ -7,6 +7,7 @@ import { Agent } from '../types';
 import { motion } from 'motion/react';
 import { User, Mail, Phone, FileText, MapPin, Home, Save, AlertCircle, ShieldCheck, Trash2, RefreshCw } from 'lucide-react';
 import { handleFirestoreError, OperationType } from '../utils/firestore-errors';
+import AgentDocuments from '../components/AgentDocuments';
 
 const ONTARIO_CITIES = [
   'Toronto', 'Ottawa', 'Mississauga', 'Brampton', 'Hamilton', 
@@ -27,6 +28,7 @@ export default function Profile() {
   const [selectedCities, setSelectedCities] = useState<string[]>([]);
   const [selectedPropertyTypes, setSelectedPropertyTypes] = useState<string[]>([]);
   const [message, setMessage] = useState({ type: '', text: '' });
+  const [agentDocuments, setAgentDocuments] = useState<Record<string, { url: string; name: string; uploadedAt: string }>>({});
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -41,6 +43,7 @@ export default function Profile() {
             setPhone(data.phone);
             setSelectedCities(data.specializedCities || []);
             setSelectedPropertyTypes(data.propertyTypes || []);
+            setAgentDocuments(data.documents || {});
           }
         } catch (err) {
           handleFirestoreError(err, OperationType.GET, `agents/${user.uid}`);
@@ -284,6 +287,14 @@ export default function Profile() {
           </div>
         </div>
       </form>
+
+      {/* Agent Documents section — below the main form */}
+      <div className="card-container p-8">
+        <AgentDocuments
+          agentDocuments={agentDocuments}
+          onUpdate={setAgentDocuments}
+        />
+      </div>
     </div>
   );
 }
