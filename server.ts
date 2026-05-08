@@ -558,8 +558,15 @@ Rules:
       try {
         filledBytes = await pdfDoc.save();
       } catch (saveErr) {
-        // pdf-lib couldn't re-serialise this PDF — return original bytes unchanged
         console.warn('[Prefill] pdfDoc.save() failed, returning original:', saveErr);
+        return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
+      }
+
+      // Sanity check: complex OREA PDFs (e.g. BRA) sometimes produce a drastically
+      // smaller output when pdf-lib drops structures it doesn't understand.
+      // A result smaller than 70% of the input is a sign of silent corruption.
+      if (filledBytes.length < pdfBytes.length * 0.70) {
+        console.warn(`[Prefill] Output ${filledBytes.length}B vs input ${pdfBytes.length}B — likely corrupted, returning original`);
         return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
       }
 
