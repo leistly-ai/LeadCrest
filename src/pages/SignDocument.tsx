@@ -69,6 +69,10 @@ export default function SignDocument() {
 
       let resolvedPdfUrl: string | null = null;
       let resolvedAgentInfo = { name: '', email: '', brokerage: '' };
+
+      // Check for a pre-filled PDF cached at email-send time (instant load, no Gemini call)
+      const cachedPrefillUrl: string | null = data.prefilledDocs?.[stepId] || null;
+
       if (aid) {
         const agentDoc = await getDoc(doc(db, 'agents', aid));
         if (agentDoc.exists()) {
@@ -86,7 +90,6 @@ export default function SignDocument() {
         }
       }
 
-      // Fall back to default local PDF if no custom doc
       if (!resolvedPdfUrl) {
         const defaultUrl = `/documents/${stepId}.pdf`;
         try {
@@ -95,8 +98,18 @@ export default function SignDocument() {
         } catch { /* no default PDF */ }
       }
 
-      // Pre-fill the PDF with lead data
-      if (resolvedPdfUrl) {
+      // If a cached pre-filled PDF exists, use it instantly — no prefill needed
+      if (cachedPrefillUrl) {
+        setPdfUrl(cachedPrefillUrl);
+        // Still need base64 for signature embedding at submit time — fetch it
+        try {
+          const r = await fetch(cachedPrefillUrl);
+          const buf = await r.arrayBuffer();
+          const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+          setPrefillPdfBase64(b64);
+        } catch { /* sign endpoint will fall back to local file */ }
+      } else if (resolvedPdfUrl) {
+        // No cache yet — run prefill on demand
         setPrefilling(true);
         try {
           const prefillRes = await fetch('/api/prefill-document', {
@@ -124,15 +137,11 @@ export default function SignDocument() {
           if (prefillRes.ok) {
             const { pdf, fieldsFilled } = await prefillRes.json();
             if (fieldsFilled > 0) {
-              // pdf-lib successfully filled fields — use the processed PDF
               setPrefillPdfBase64(pdf);
               const bytes = new Uint8Array(atob(pdf).split('').map(c => c.charCodeAt(0)));
               setPdfUrl(URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' })));
             } else {
-              // pdf-lib returned the original unchanged (complex PDF it can't process)
-              // Show the original file directly — no blob URL encoding involved
               setPdfUrl(resolvedPdfUrl);
-              // Leave prefillPdfBase64 null so sign endpoint reads the local file
             }
           } else {
             setPdfUrl(resolvedPdfUrl);

@@ -489,13 +489,27 @@ Return only the JSON object, no markdown, no explanation.`,
       }
 
       // 2. Load PDF and detect AcroForm fields
+      const { PDFName } = await import('pdf-lib');
       const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+
+      // Detect XFA forms — pdf-lib strips XFA data on save, corrupting the PDF.
+      // Return the original immediately if XFA is present.
+      try {
+        const acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
+        if (acroFormRef) {
+          const acroForm = pdfDoc.context.lookup(acroFormRef) as any;
+          if (acroForm?.get?.(PDFName.of('XFA'))) {
+            console.warn(`[Prefill] XFA form detected for stepId=${stepId} — returning original`);
+            return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
+          }
+        }
+      } catch { /* continue — XFA check is best-effort */ }
+
       const form = pdfDoc.getForm();
       const fields = form.getFields();
       const fieldNames = fields.map(f => f.getName());
 
       if (fieldNames.length === 0) {
-        // No form fields — return original PDF as-is
         return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
       }
 

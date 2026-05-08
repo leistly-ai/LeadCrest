@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { doc, updateDoc, arrayUnion } from 'firebase/firestore';
-import { db } from '../firebase';
+import { doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, storage } from '../firebase';
 import { auth } from '../firebase';
 import { Lead } from '../types';
 import { PIPELINE_STEPS, STEP_MAP } from '../data/pipelineSteps';
@@ -54,6 +55,60 @@ export default function TransactionPipeline({ lead, onUpdate }: TransactionPipel
   const signatures: Record<string, any> = (lead as any).signatures || {};
   const fintracData: Record<string, any> | null = (lead as any).fintracData || null;
 
+  const prefillAndCache = async (stepId: string) => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) return;
+
+    // Fetch agent profile for brokerage / name
+    const agentSnap = await getDoc(doc(db, 'agents', currentUser.uid));
+    const agentData = agentSnap.exists() ? agentSnap.data() : {};
+
+    // Check if agent has a custom doc for this step
+    const customDocUrl: string | null = agentData.documents?.[stepId]?.url || null;
+
+    const prefillRes = await fetch('/api/prefill-document', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pdfUrl: customDocUrl,
+        stepId: customDocUrl ? null : stepId,
+        leadData: {
+          name: lead.name,
+          email: lead.email,
+          phone: lead.phone,
+          address: lead.currentAddress,
+          budget: (lead as any).budget,
+          timeline: (lead as any).timeline,
+          type: lead.type,
+          employer: (lead as any).employmentInfo?.company,
+          salary: (lead as any).employmentInfo?.salary,
+        },
+        agentData: {
+          name: agentData.name || currentUser.displayName || '',
+          email: agentData.email || currentUser.email || '',
+          brokerage: agentData.brokerage || '',
+          date: new Date().toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' }),
+        },
+      }),
+    });
+    if (!prefillRes.ok) return;
+
+    const { pdf, fieldsFilled } = await prefillRes.json();
+    if (fieldsFilled === 0) return; // XFA or no-field PDF — no point caching
+
+    // Upload pre-filled PDF to Firebase Storage
+    const pdfBytes = Uint8Array.from(atob(pdf), c => c.charCodeAt(0));
+    const storageRef = ref(storage, `prefilled/${lead.id}/${stepId}.pdf`);
+    await uploadBytes(storageRef, pdfBytes, { contentType: 'application/pdf' });
+    const downloadUrl = await getDownloadURL(storageRef);
+
+    // Save URL to lead doc so SignDocument can load it instantly
+    await updateDoc(doc(db, 'leads', lead.id), {
+      [`prefilledDocs.${stepId}`]: downloadUrl,
+    });
+    console.log(`[Prefill Cache] Cached pre-filled PDF for ${lead.id}/${stepId}`);
+  };
+
   const handleSendEmail = async (stepId: string) => {
     const step = STEP_MAP[stepId];
     setSending(stepId);
@@ -82,13 +137,17 @@ export default function TransactionPipeline({ lead, onUpdate }: TransactionPipel
         throw new Error(d.error || 'Failed to send email');
       }
 
-      // Update Firestore client-side (no Admin SDK needed)
+      // Update Firestore client-side
       await updateDoc(doc(db, 'leads', lead.id), {
         completedSteps: arrayUnion(stepId),
       });
 
       setSentSteps(prev => new Set(prev).add(stepId));
       onUpdate({ ...lead, ...({ completedSteps: [...completedSteps, stepId] } as any) });
+
+      // Pre-fill the PDF in the background and cache it so the lead gets instant load
+      prefillAndCache(stepId).catch(() => {});
+
     } catch (err: any) {
       setSendError(err.message || 'Failed to send email');
     } finally {
