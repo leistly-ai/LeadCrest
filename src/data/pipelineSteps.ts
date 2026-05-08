@@ -24,7 +24,7 @@ export const PIPELINE_STEPS: StepDefinition[] = [
     title: 'RECO Information Guide',
     description: 'Provide before any services — explains buyer rights under TRESA.',
     docLabel: 'RECO Guide',
-    requiresSignature: false,
+    requiresSignature: true,
     requiresIdUpload: false,
     documentSummary: `The RECO Information Guide is a mandatory disclosure document required under Ontario's Trust in Real Estate Services Act (TRESA 2002, as amended 2023).\n\nIt explains:\n• Your rights as a real estate consumer in Ontario\n• The difference between being a "client" (full representation) and a "self-represented party"\n• What services you can expect from a registered salesperson\n• How to file a complaint with RECO if needed\n\nThis document must be provided to you before any real estate services are rendered.`,
     acknowledgement: 'I confirm that I have received and reviewed the RECO Information Guide and understand my rights as a real estate consumer under TRESA.',
