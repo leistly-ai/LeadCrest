@@ -552,9 +552,8 @@ Rules:
         }
       }
 
-      // Flatten — some complex OREA PDFs reject flatten; skip it if it throws
-      try { form.flatten(); } catch { /* leave interactive, still display correctly */ }
-
+      // Do NOT flatten here — keep form fields alive so the sign endpoint
+      // can locate the buyer signature field and draw the signature into it.
       let filledBytes: Uint8Array;
       try {
         filledBytes = await pdfDoc.save();
@@ -630,45 +629,60 @@ Rules:
               const pdfDoc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
               const sigBase64 = signature.replace(/^data:image\/png;base64,/, '');
               const sigImage = await pdfDoc.embedPng(Buffer.from(sigBase64, 'base64'));
-
-              // Find buyer/client signature fields and draw the signature PNG at their location.
-              // We assume signature fields are on the last page (true for RECO and most OREA forms).
               const pages = pdfDoc.getPages();
-              const lastPage = pages[pages.length - 1];
               const form = pdfDoc.getForm();
+              const allFields = form.getFields();
+              console.log(`[Sign] PDF fields found: ${allFields.map(f => f.getName()).join(', ')}`);
+
               let placed = false;
 
-              for (const field of form.getFields()) {
+              // Search every field for a buyer/client signature slot
+              for (const field of allFields) {
                 const name = field.getName().toLowerCase();
-                const isSigField =
+                const isBuyerSig =
                   (name.includes('buyer') || name.includes('seller') || name.includes('client') || name.includes('signer')) &&
-                  name.includes('sig');
-                if (!isSigField) continue;
+                  (name.includes('sig') || name.includes('signature'));
+                if (!isBuyerSig) continue;
 
                 const widgets = (field as any).acroField.getWidgets();
                 if (!widgets.length) continue;
-                const rect = widgets[0].getRectangle();
-                const dims = sigImage.scaleToFit(
-                  Math.max(rect.width - 6, 10),
-                  Math.max(rect.height - 6, 10),
-                );
-                lastPage.drawImage(sigImage, {
-                  x: rect.x + 3,
-                  y: rect.y + (rect.height - dims.height) / 2,
-                  width: dims.width,
-                  height: dims.height,
-                });
-                placed = true;
-                break; // place in the first matching field only
+
+                // Find which page the widget sits on by checking each page's annotations
+                for (const widget of widgets) {
+                  const rect = widget.getRectangle();
+                  for (let pi = 0; pi < pages.length; pi++) {
+                    const annots = (pages[pi].node as any).lookupMaybe
+                      ? (pages[pi].node as any).lookupMaybe('Annots')
+                      : null;
+                    // If we can't inspect annotations, fall back to last page
+                    const targetPage = annots ? pages[pi] : pages[pages.length - 1];
+                    const dims = sigImage.scaleToFit(
+                      Math.max(rect.width - 6, 10),
+                      Math.max(rect.height - 6, 10),
+                    );
+                    targetPage.drawImage(sigImage, {
+                      x: rect.x + 3,
+                      y: rect.y + (rect.height - dims.height) / 2,
+                      width: dims.width,
+                      height: dims.height,
+                    });
+                    placed = true;
+                    break;
+                  }
+                  if (placed) break;
+                }
+                if (placed) break;
               }
 
               if (!placed) {
-                // Fallback: bottom-left of last page — safe position for most OREA forms
-                const dims = sigImage.scaleToFit(200, 55);
-                lastPage.drawImage(sigImage, { x: 52, y: 128, width: dims.width, height: dims.height });
+                // Fallback: fixed position on last page that works for RECO acknowledgement
+                const lastPage = pages[pages.length - 1];
+                const dims = sigImage.scaleToFit(200, 50);
+                lastPage.drawImage(sigImage, { x: 52, y: 148, width: dims.width, height: dims.height });
+                console.log('[Sign] Signature placed at fallback position');
               }
 
-              form.flatten();
+              try { form.flatten(); } catch { /* ignore — signature is already drawn */ }
               pdfBuffer = Buffer.from(await pdfDoc.save());
               console.log(`[Sign] Signature embedded in PDF, placed=${placed}`);
             } catch (embedErr) {
