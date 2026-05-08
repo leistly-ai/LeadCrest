@@ -556,7 +556,7 @@ Rules:
       // can locate the buyer signature field and draw the signature into it.
       let filledBytes: Uint8Array;
       try {
-        filledBytes = await pdfDoc.save();
+        filledBytes = await pdfDoc.save({ useObjectStreams: false });
       } catch (saveErr) {
         console.warn('[Prefill] pdfDoc.save() failed, returning original:', saveErr);
         return res.json({ pdf: pdfBytes.toString('base64'), fieldsFilled: 0 });
@@ -697,7 +697,7 @@ Rules:
               }
 
               try { form.flatten(); } catch { /* ignore — signature is already drawn */ }
-              pdfBuffer = Buffer.from(await pdfDoc.save());
+              pdfBuffer = Buffer.from(await pdfDoc.save({ useObjectStreams: false }));
               console.log(`[Sign] Signature embedded in PDF, placed=${placed}`);
             } catch (embedErr) {
               console.warn('[Sign] Could not embed signature in PDF:', embedErr);
