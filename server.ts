@@ -137,6 +137,19 @@ Rules:
     } catch { /* skip unwritable fields */ }
   }
 
+  // Regenerate appearance streams so Chrome renders the filled values visually.
+  // setText() updates /V (the value) but NOT /AP/N (the rendered appearance).
+  // Without this call, Chrome shows the old empty appearance stream.
+  if (filled > 0) {
+    try {
+      const { StandardFonts } = await import('pdf-lib');
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      form.updateFieldAppearances(font);
+    } catch (appErr) {
+      console.warn('[Prefill] Could not update field appearances:', appErr);
+    }
+  }
+
   let filledBytes: Uint8Array;
   try {
     filledBytes = await pdfDoc.save({ useObjectStreams: false });
