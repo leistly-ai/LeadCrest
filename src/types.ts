@@ -22,6 +22,7 @@ export interface Agent {
   googleContacts?: any;
   lastSyncAt?: string;
   licenseInvalidDate?: string;
+  documents?: Record<string, { url: string; name: string; uploadedAt: string }>;
   createdAt: string;
 }
 

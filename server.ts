@@ -22,6 +22,188 @@ const PREFILL_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Dedup map — prevents concurrent requests for the same key from all running Gemini
 const prefillInFlight = new Map<string, Promise<{ pdf: string; fieldsFilled: number }>>();
 
+// Core prefill logic — extracted so it can be called from both the API endpoint
+// and the FINTRAC handler (which pre-warms the BRA cache after ID extraction).
+async function buildPrefillPdf(params: {
+  stepId?: string;
+  pdfUrl?: string | null;
+  leadData: Record<string, any>;
+  agentData: Record<string, any>;
+}): Promise<{ pdf: string; fieldsFilled: number }> {
+  const { stepId, pdfUrl, leadData, agentData } = params;
+  const { PDFDocument, PDFName } = await import('pdf-lib');
+
+  let pdfBytes: Buffer;
+  if (pdfUrl && (pdfUrl.startsWith('http://') || pdfUrl.startsWith('https://'))) {
+    const fetchRes = await fetch(pdfUrl);
+    if (!fetchRes.ok) throw new Error(`Could not fetch PDF: ${fetchRes.status}`);
+    pdfBytes = Buffer.from(await fetchRes.arrayBuffer());
+  } else {
+    const localId = stepId || pdfUrl?.replace(/^\/documents\//, '').replace(/\.pdf$/, '');
+    const localPath = path.join(process.cwd(), 'public', 'documents', `${localId}.pdf`);
+    if (!fs.existsSync(localPath)) throw new Error(`No PDF found for step: ${localId}`);
+    pdfBytes = fs.readFileSync(localPath);
+  }
+
+  // XFA detection — two methods for reliability
+  const rawXfa = pdfBytes.includes(Buffer.from('/XFA')) || pdfBytes.includes(Buffer.from('<XFA:'));
+  if (rawXfa) {
+    console.warn(`[Prefill] XFA form detected (raw bytes) for stepId=${stepId} — returning original`);
+    return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
+  }
+
+  const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+  try {
+    const acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
+    if (acroFormRef) {
+      const acroForm = pdfDoc.context.lookup(acroFormRef) as any;
+      if (acroForm?.get?.(PDFName.of('XFA'))) {
+        console.warn(`[Prefill] XFA form detected (catalog) for stepId=${stepId} — returning original`);
+        return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
+      }
+    }
+  } catch { /* non-critical */ }
+
+  const form = pdfDoc.getForm();
+  const fields = form.getFields();
+  const fieldNames = fields.map(f => f.getName());
+
+  if (fieldNames.length === 0) return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
+
+  let fieldMap: Record<string, string> = {};
+  try {
+    const ai = getAI();
+    const prompt = `You are filling a PDF form for a real estate transaction in Ontario, Canada.
+Here are the PDF form field names:
+${JSON.stringify(fieldNames)}
+
+Here is the lead/client data:
+${JSON.stringify(leadData, null, 2)}
+
+Here is the agent/realtor data:
+${JSON.stringify(agentData, null, 2)}
+
+Rules:
+- Map each field name to the best matching value from either the lead data or the agent data.
+- Fields referring to "buyer", "seller", "client", "signer" → use lead data.
+- Fields referring to "agent", "realtor", "salesperson", "brokerage", "representative" → use agent data.
+- Fields referring to "date", "today", "provided" → use today's date from agent data if provided.
+- Leave signature fields (containing the word "signature") as empty string "" — signatures will be embedded separately.
+- For fields you cannot match, use an empty string "".
+- Only return the JSON object, no explanation.`;
+    const result = await generateWithFallback(ai, {
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    });
+    const raw = (result?.text || '').trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
+    fieldMap = JSON.parse(raw);
+  } catch (geminiErr) {
+    console.warn('[Prefill] Gemini mapping failed, leaving fields blank:', geminiErr);
+  }
+
+  let filled = 0;
+  for (const field of fields) {
+    const value = fieldMap[field.getName()];
+    if (!value) continue;
+    try {
+      if (field.constructor.name === 'PDFTextField') {
+        (field as any).setText(String(value));
+        filled++;
+      } else if (field.constructor.name === 'PDFCheckBox' && ['true', 'yes', '1'].includes(value)) {
+        (field as any).check();
+        filled++;
+      }
+    } catch { /* skip unwritable fields */ }
+  }
+
+  let filledBytes: Uint8Array;
+  try {
+    filledBytes = await pdfDoc.save({ useObjectStreams: false });
+  } catch {
+    return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
+  }
+
+  if (filledBytes.length < pdfBytes.length * 0.70) {
+    console.warn(`[Prefill] Output too small (${filledBytes.length}B vs ${pdfBytes.length}B) — returning original`);
+    return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
+  }
+
+  try {
+    await PDFDocument.load(filledBytes, { ignoreEncryption: true });
+  } catch {
+    console.warn('[Prefill] Round-trip validation failed, returning original');
+    return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
+  }
+
+  const resultPdf = Buffer.from(filledBytes).toString('base64');
+  console.log(`[Prefill] stepId=${stepId} fields=${fieldNames.length} filled=${filled}`);
+  return { pdf: resultPdf, fieldsFilled: filled };
+}
+
+// ── Gemini helpers (module-level so buildPrefillPdf can use them) ─────────────
+function getAI(keyOverride?: string): GoogleGenAI {
+  let source = 'override';
+  let rawKey = keyOverride;
+
+  if (!rawKey) {
+    const possibleKeys = [
+      { name: 'REAL_GEMINI_KEY',              val: process.env.REAL_GEMINI_KEY },
+      { name: 'GEMINI_API_KEY',               val: process.env.GEMINI_API_KEY },
+      { name: 'NEXT_PUBLIC_GEMINI_API_KEY',   val: process.env.NEXT_PUBLIC_GEMINI_API_KEY },
+      { name: 'GOOGLE_AI_KEY',                val: process.env.GOOGLE_AI_KEY },
+      { name: 'API_KEY',                      val: process.env.API_KEY },
+      { name: 'GOOGLE_API_KEY_ALT',           val: process.env.GOOGLE_API_KEY },
+      { name: 'VITE_GEMINI_API_KEY',          val: process.env.VITE_GEMINI_API_KEY },
+    ];
+    for (const k of possibleKeys) {
+      if (k.val && k.val !== 'MY_GEMINI_API_KEY' && !k.val.includes('YOUR_') && k.val.length > 10) {
+        rawKey = k.val; source = k.name; break;
+      }
+    }
+    if (!rawKey) {
+      rawKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+      source = 'none found (showing fallback)';
+    }
+  }
+
+  if (!rawKey || rawKey === 'MY_GEMINI_API_KEY' || rawKey.includes('YOUR_')) {
+    throw new Error('No valid API key found. Please update GEMINI_API_KEY with your actual AIza... key.');
+  }
+
+  const key = rawKey
+    .replace(/Gemini API Key • /g, '')
+    .replace(/^(key|value|api_key|gemini_api_key):\s*/i, '')
+    .replace(/["']/g, '')
+    .replace(/[•…\s]/g, '')
+    .trim();
+
+  if (!key.startsWith('AIza')) {
+    throw new Error(`Invalid key format from ${source}. Gemini API keys must start with 'AIza'. Your current key starts with '${key.substring(0, 4)}'.`);
+  }
+
+  console.log(`[AI] Initializing with key from ${source}: ${key.substring(0, 6)}...${key.substring(key.length - 4)}`);
+  return new GoogleGenAI({ apiKey: key });
+}
+
+async function generateWithFallback(aiInstance: GoogleGenAI, params: any) {
+  const models = ['gemini-3-flash-preview', 'gemini-2.5-flash'];
+  let lastError = null;
+  for (const modelName of models) {
+    try {
+      console.log(`[AI] Attempting ${modelName}...`);
+      const response = await aiInstance.models.generateContent({ ...params, model: modelName });
+      return response;
+    } catch (error: any) {
+      lastError = error;
+      if ((error.message || '').match(/not found|not supported/)) {
+        console.warn(`[AI] ${modelName} unavailable, trying next...`);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
 // In-memory session store
 const sessions = new Map<string, any>();
 const lastRequests: any[] = [];
@@ -482,6 +664,61 @@ Return only the JSON object, no markdown, no explanation.`,
       }
 
       res.json({ success: true, extractedData, submittedAt });
+
+      // ── Pre-warm BRA cache in the background ──────────────────────────
+      // ID is now verified and lead data updated — kick off BRA prefill so
+      // the document is ready by the time the agent sends the BRA email.
+      // This runs after the response is sent so it doesn't block the lead.
+      if (adminDb && leadId) {
+        (async () => {
+          try {
+            const cacheKey = `${leadId}:bra`;
+            // Skip if already cached
+            const existing = prefilledPdfCache.get(cacheKey);
+            if (existing && Date.now() - existing.cachedAt < PREFILL_CACHE_TTL_MS) return;
+
+            // Look up agent custom BRA doc and brokerage from Firestore
+            const leadSnap = await adminDb.collection('leads').doc(leadId).get();
+            const leadDocData = leadSnap.data() || {};
+            const agentId = leadDocData.agentId;
+            let agentDocData: Record<string, any> = {};
+            if (agentId) {
+              const agentSnap = await adminDb.collection('agents').doc(agentId).get();
+              agentDocData = agentSnap.data() || {};
+            }
+
+            const customBraUrl: string | null = agentDocData.documents?.bra?.url || null;
+            const verifiedName = extractedData.fullName || leadDocData.name || '';
+            const verifiedAddress = extractedData.address || leadDocData.currentAddress || '';
+
+            const result = await buildPrefillPdf({
+              stepId: 'bra',
+              pdfUrl: customBraUrl,
+              leadData: {
+                name: verifiedName,
+                email: leadDocData.email || leadEmail || '',
+                phone: leadDocData.phone || '',
+                address: verifiedAddress,
+                dateOfBirth: extractedData.dateOfBirth || '',
+                budget: leadDocData.budget || '',
+                timeline: leadDocData.timeline || '',
+                type: leadDocData.type || '',
+              },
+              agentData: {
+                name: agentDocData.name || agentName || '',
+                email: agentDocData.email || agentEmail || '',
+                brokerage: agentDocData.brokerage || '',
+                date: new Date().toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' }),
+              },
+            });
+
+            prefilledPdfCache.set(cacheKey, { ...result, cachedAt: Date.now() });
+            console.log(`[FINTRAC] BRA pre-warmed for lead ${leadId} (fieldsFilled=${result.fieldsFilled})`);
+          } catch (preWarmErr: any) {
+            console.warn('[FINTRAC] BRA pre-warm failed (non-fatal):', preWarmErr.message);
+          }
+        })();
+      }
     } catch (error: any) {
       console.error('[FINTRAC] Error:', error);
       res.status(500).json({ error: error.message || 'Failed to process submission' });
@@ -516,132 +753,7 @@ Return only the JSON object, no markdown, no explanation.`,
       }
     }
 
-    const processPromise = (async (): Promise<{ pdf: string; fieldsFilled: number }> => {
-      const { PDFDocument } = await import('pdf-lib');
-
-      // 1. Fetch the PDF bytes
-      let pdfBytes: Buffer;
-      if (pdfUrl && (pdfUrl.startsWith('http://') || pdfUrl.startsWith('https://'))) {
-        const fetchRes = await fetch(pdfUrl);
-        if (!fetchRes.ok) throw new Error(`Could not fetch PDF: ${fetchRes.status}`);
-        pdfBytes = Buffer.from(await fetchRes.arrayBuffer());
-      } else {
-        const localId = stepId || pdfUrl?.replace(/^\/documents\//, '').replace(/\.pdf$/, '');
-        const localPath = path.join(process.cwd(), 'public', 'documents', `${localId}.pdf`);
-        if (!fs.existsSync(localPath)) throw new Error(`No PDF found for step: ${localId}`);
-        pdfBytes = fs.readFileSync(localPath);
-      }
-
-      // 2. XFA detection — two methods for reliability:
-      //    a) raw bytes search (fast, catches all XFA variants)
-      //    b) pdf-lib catalog lookup (structured, catches hybrid XFA)
-      const rawXfa = pdfBytes.includes(Buffer.from('/XFA')) || pdfBytes.includes(Buffer.from('<XFA:'));
-      if (rawXfa) {
-        console.warn(`[Prefill] XFA form detected (raw bytes) for stepId=${stepId} — returning original`);
-        const originalBase64 = pdfBytes.toString('base64');
-        return { pdf: originalBase64, fieldsFilled: 0 };
-      }
-
-      const { PDFName } = await import('pdf-lib');
-      const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
-
-      try {
-        const acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
-        if (acroFormRef) {
-          const acroForm = pdfDoc.context.lookup(acroFormRef) as any;
-          if (acroForm?.get?.(PDFName.of('XFA'))) {
-            console.warn(`[Prefill] XFA form detected (catalog) for stepId=${stepId} — returning original`);
-            return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
-          }
-        }
-      } catch { /* non-critical — continue with normal fill */ }
-
-      const form = pdfDoc.getForm();
-      const fields = form.getFields();
-      const fieldNames = fields.map(f => f.getName());
-
-      if (fieldNames.length === 0) {
-        return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
-      }
-
-      // 3. Ask Gemini to map field names → lead data values
-      let fieldMap: Record<string, string> = {};
-      try {
-        const ai = getAI();
-        const prompt = `You are filling a PDF form for a real estate transaction in Ontario, Canada.
-Here are the PDF form field names:
-${JSON.stringify(fieldNames)}
-
-Here is the lead/client data:
-${JSON.stringify(leadData || {}, null, 2)}
-
-Here is the agent/realtor data:
-${JSON.stringify(agentData || {}, null, 2)}
-
-Rules:
-- Map each field name to the best matching value from either the lead data or the agent data.
-- Fields referring to "buyer", "seller", "client", "signer" → use lead data.
-- Fields referring to "agent", "realtor", "salesperson", "brokerage", "representative" → use agent data.
-- Fields referring to "date", "today", "provided" → use today's date from agent data if provided.
-- Leave signature fields (containing the word "signature") as empty string "" — signatures will be embedded separately.
-- For fields you cannot match, use an empty string "".
-- Only return the JSON object, no explanation.`;
-
-        const result = await generateWithFallback(ai, {
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        });
-        const raw = (result.text || '').trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
-        fieldMap = JSON.parse(raw);
-      } catch (geminiErr) {
-        console.warn('[Prefill] Gemini mapping failed, leaving fields blank:', geminiErr);
-        fieldMap = {};
-      }
-
-      // 4. Fill the fields
-      let filled = 0;
-      for (const field of fields) {
-        const name = field.getName();
-        const value = fieldMap[name];
-        if (!value) continue;
-        try {
-          const fieldType = field.constructor.name;
-          if (fieldType === 'PDFTextField') {
-            (field as any).setText(String(value));
-            filled++;
-          } else if (fieldType === 'PDFCheckBox' && (value === 'true' || value === 'yes' || value === '1')) {
-            (field as any).check();
-            filled++;
-          }
-        } catch { /* skip unwritable fields */ }
-      }
-
-      // Do NOT flatten — keep form fields alive so the sign endpoint can embed the signature
-      let filledBytes: Uint8Array;
-      try {
-        filledBytes = await pdfDoc.save({ useObjectStreams: false });
-      } catch (saveErr) {
-        console.warn('[Prefill] pdfDoc.save() failed, returning original:', saveErr);
-        return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
-      }
-
-      // Sanity check: output much smaller than input → pdf-lib likely dropped content
-      if (filledBytes.length < pdfBytes.length * 0.70) {
-        console.warn(`[Prefill] Output ${filledBytes.length}B vs input ${pdfBytes.length}B — likely corrupted, returning original`);
-        return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
-      }
-
-      // Round-trip validation
-      try {
-        await PDFDocument.load(filledBytes, { ignoreEncryption: true });
-      } catch {
-        console.warn('[Prefill] Round-trip validation failed, returning original');
-        return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
-      }
-
-      const resultPdf = Buffer.from(filledBytes).toString('base64');
-      console.log(`[Prefill] stepId=${stepId} fields=${fieldNames.length} filled=${filled}`);
-      return { pdf: resultPdf, fieldsFilled: filled };
-    })();
+    const processPromise = buildPrefillPdf({ stepId, pdfUrl, leadData: leadData || {}, agentData: agentData || {} });
 
     // Register in-flight promise for dedup, clean up when done
     if (cacheKey) prefillInFlight.set(cacheKey, processPromise);
@@ -1101,83 +1213,6 @@ Rules:
   console.log(`[Server] Current working directory: ${process.cwd()}`);
   console.log(`[Server] NODE_ENV: ${process.env.NODE_ENV}`);
   console.log(`[Server] GEMINI_API_KEY present: ${!!process.env.GEMINI_API_KEY}`);
-
-  const getAI = (keyOverride?: string) => {
-    let source = 'override';
-    let rawKey = keyOverride;
-    
-    if (!rawKey) {
-      const possibleKeys = [
-        { name: 'REAL_GEMINI_KEY', val: process.env.REAL_GEMINI_KEY },
-        { name: 'GEMINI_API_KEY', val: process.env.GEMINI_API_KEY },
-        { name: 'NEXT_PUBLIC_GEMINI_API_KEY', val: process.env.NEXT_PUBLIC_GEMINI_API_KEY },
-        { name: 'GOOGLE_AI_KEY', val: process.env.GOOGLE_AI_KEY },
-        { name: 'API_KEY', val: process.env.API_KEY },
-        { name: 'GOOGLE_API_KEY_ALT', val: process.env.GOOGLE_API_KEY },
-        { name: 'VITE_GEMINI_API_KEY', val: process.env.VITE_GEMINI_API_KEY }
-      ];
-
-      for (const k of possibleKeys) {
-        if (k.val && k.val !== 'MY_GEMINI_API_KEY' && !k.val.includes('YOUR_') && k.val.length > 10) {
-          rawKey = k.val;
-          source = k.name;
-          break;
-        }
-      }
-      
-      if (!rawKey) {
-        // Fallback for error message
-        rawKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-        source = 'none found (showing fallback)';
-      }
-    }
-    
-    if (!rawKey || rawKey === 'MY_GEMINI_API_KEY' || rawKey.includes('YOUR_')) {
-      throw new Error('No valid API key found. Please go to the "Secrets" tab in AI Studio and update GEMINI_API_KEY with your actual AIza... key.');
-    }
-    
-    // Aggressively clean the key
-    const key = rawKey
-      .replace(/Gemini API Key • /g, '') // Remove UI prefix if it leaked in
-      .replace(/^(key|value|api_key|gemini_api_key):\s*/i, '')
-      .replace(/["']/g, '')
-      .replace(/[•…\s]/g, '') // Remove bullets, ellipses, and spaces
-      .trim();
-
-    if (!key.startsWith('AIza')) {
-      throw new Error(`Invalid key format from ${source}. Gemini API keys must start with 'AIza'. Your current key starts with '${key.substring(0, 4)}'.`);
-    }
-
-    console.log(`[AI] Initializing with key from ${source}: ${key.substring(0, 6)}...${key.substring(key.length - 4)}`);
-    
-    return new GoogleGenAI({ apiKey: key });
-  };
-
-  // Helper to generate content with fallback
-  const generateWithFallback = async (aiInstance: GoogleGenAI, params: any) => {
-    const models = ['gemini-3-flash-preview', 'gemini-2.5-flash'];
-    let lastError = null;
-
-    for (const modelName of models) {
-      try {
-        console.log(`[AI] Attempting ${modelName}...`);
-        const response = await aiInstance.models.generateContent({
-          ...params,
-          model: modelName,
-        });
-        return response;
-      } catch (error: any) {
-        lastError = error;
-        const msg = error.message || '';
-        if (msg.includes('not found') || msg.includes('not supported')) {
-          console.warn(`[AI] ${modelName} failed/not found, trying next...`);
-          continue;
-        }
-        throw error; // Rethrow if it's a key or quota error
-      }
-    }
-    throw lastError;
-  };
 
   // API for lead scoring (0-100)
   app.get('/api/test', (req, res) => {
