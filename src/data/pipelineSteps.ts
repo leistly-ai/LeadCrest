@@ -30,18 +30,6 @@ export const PIPELINE_STEPS: StepDefinition[] = [
     acknowledgement: 'I confirm that I have received and reviewed the RECO Information Guide and understand my rights as a real estate consumer under TRESA.',
   },
   {
-    id: 'bra',
-    phase: 'Phase 1 · Lead to Client',
-    phaseColor: 'honey',
-    title: 'Buyer Representation Agreement (BRA)',
-    description: 'OREA Form 300 — formalises our working relationship and fiduciary duties.',
-    docLabel: 'OREA Form 300',
-    requiresSignature: true,
-    requiresIdUpload: false,
-    documentSummary: `The Buyer Representation Agreement (OREA Form 300) is the legal contract that establishes a formal client relationship between you and your real estate agent.\n\nKey terms covered:\n• Exclusivity — your agent will represent you exclusively for the agreed property type and geographic area\n• Duration — the period during which this agreement is active\n• Commission — the agreed remuneration payable to the brokerage\n• Fiduciary duties — your agent's obligations to act in your best interest, maintain confidentiality, and disclose conflicts\n• Holdover clause — applies to properties shown during the agreement term\n\nThis agreement is required before your agent can provide advice, negotiate on your behalf, or represent you in any offer.`,
-    acknowledgement: 'I agree to enter into the Buyer Representation Agreement (OREA Form 300) with the brokerage, on the terms as communicated to me, and authorise the agent to represent me in my property search.',
-  },
-  {
     id: 'fintrac',
     phase: 'Phase 1 · Lead to Client',
     phaseColor: 'honey',
@@ -52,6 +40,18 @@ export const PIPELINE_STEPS: StepDefinition[] = [
     requiresIdUpload: true,
     documentSummary: `FINTRAC (Financial Transactions and Reports Analysis Centre of Canada) identity verification is a mandatory requirement under the Proceeds of Crime (Money Laundering) and Terrorist Financing Act.\n\nAll registered real estate professionals in Canada are legally obligated to verify the identity of their clients before completing a real estate transaction.\n\nWhat is collected:\n• Full legal name\n• Date of birth\n• Current address\n• Type and number of government-issued photo ID (e.g., passport, driver's licence)\n• Document issuing jurisdiction and expiry date\n\nThis information is kept confidential and is not shared with third parties except as required by law.`,
     acknowledgement: 'I consent to identity verification as required by FINTRAC regulations and confirm that the identification document I have provided is valid, current, and belongs to me.',
+  },
+  {
+    id: 'bra',
+    phase: 'Phase 1 · Lead to Client',
+    phaseColor: 'honey',
+    title: 'Buyer Representation Agreement (BRA)',
+    description: 'OREA Form 300 — formalises our working relationship and fiduciary duties.',
+    docLabel: 'OREA Form 300',
+    requiresSignature: true,
+    requiresIdUpload: false,
+    documentSummary: `The Buyer Representation Agreement (OREA Form 300) is the legal contract that establishes a formal client relationship between you and your real estate agent.\n\nKey terms covered:\n• Exclusivity — your agent will represent you exclusively for the agreed property type and geographic area\n• Duration — the period during which this agreement is active\n• Commission — the agreed remuneration payable to the brokerage\n• Fiduciary duties — your agent's obligations to act in your best interest, maintain confidentiality, and disclose conflicts\n• Holdover clause — applies to properties shown during the agreement term\n\nThis agreement is required before your agent can provide advice, negotiate on your behalf, or represent you in any offer.`,
+    acknowledgement: 'I agree to enter into the Buyer Representation Agreement (OREA Form 300) with the brokerage, on the terms as communicated to me, and authorise the agent to represent me in my property search.',
   },
 
   // Phase 2 — Mortgage Referral

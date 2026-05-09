@@ -376,6 +376,25 @@ Return only the JSON object, no markdown, no explanation.`,
         // Non-fatal — we still send the email with empty extracted fields
       }
 
+      // ── Update lead document with verified identity data ───────────────
+      // This ensures the BRA (signed next) is pre-filled with the real legal
+      // name and address from the government-issued ID, not just the intake form.
+      if (adminDb && leadId && Object.keys(extractedData).length > 0) {
+        try {
+          const leadUpdate: Record<string, string> = {};
+          if (extractedData.fullName) leadUpdate.name = extractedData.fullName;
+          if (extractedData.address) leadUpdate.currentAddress = extractedData.address;
+          if (extractedData.dateOfBirth) leadUpdate.dateOfBirth = extractedData.dateOfBirth;
+          if (Object.keys(leadUpdate).length > 0) {
+            await adminDb.collection('leads').doc(leadId).update(leadUpdate);
+            console.log(`[FINTRAC] Updated lead ${leadId} with verified ID data:`, JSON.stringify(leadUpdate));
+          }
+        } catch (updateErr: any) {
+          console.error('[FINTRAC] Failed to update lead with ID data:', updateErr.message);
+          // Non-fatal — ID was still received and emailed
+        }
+      }
+
       // ── Emails ────────────────────────────────────────────────────────
       if (resendKey) {
         const resend = new Resend(resendKey);
