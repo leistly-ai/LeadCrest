@@ -58,27 +58,42 @@ async function buildPrefillPdf(params: {
   const hasGarbledNames = fieldNames.filter(n => /[^\x20-\x7E]/.test(n) || n.trim().length < 2).length > fieldNames.length * 0.3;
   console.log(`[Prefill] stepId=${stepId} fields=${fieldNames.length} garbled=${hasGarbledNames}`);
 
+  // indexedMap: keys are "0", "1", ... matching fields[] positions.
+  // Using indices avoids binary field-name round-trip corruption through JSON/Gemini.
+  let indexedMap: Record<string, string> = {};
   let fieldMap: Record<string, string> = {};
   try {
     const ai = getAI();
 
     if (hasGarbledNames) {
-      // XFA form: use Gemini Vision — send the PDF so Gemini can visually map fields
-      const visionPrompt = `This is a real estate PDF form (likely OREA Form 300 Buyer Representation Agreement) with encrypted internal field names. The actual field names in the PDF are: ${JSON.stringify(fieldNames.slice(0, 60))}
+      // XFA form: use Gemini Vision — send PDF + indexed field list so Gemini
+      // responds with { "0": "value", "1": "value" } — index-based, not name-based.
+      // Garbled binary field names can't survive JSON round-trips, so we never use
+      // them as keys.
+      const indexedFields = fieldNames.slice(0, 80).map((_, i) => i);
+      const visionPrompt = `This is a real estate PDF form (OREA Form 300 Buyer Representation Agreement).
 
-Using the visual layout of the form, map each field name to the correct value from the data below.
+The form has ${fieldNames.length} fillable fields, indexed 0 to ${fieldNames.length - 1}.
 
-Lead/Client data: ${JSON.stringify(leadData, null, 2)}
-Agent/Realtor data: ${JSON.stringify(agentData, null, 2)}
+Visually scan the form and fill in the appropriate values for each field index.
+
+Lead/Client data:
+${JSON.stringify(leadData, null, 2)}
+
+Agent/Realtor data:
+${JSON.stringify(agentData, null, 2)}
 
 Rules:
-- Look at the form visually to understand what each field is for.
-- Match each field name to the correct value based on its visual context.
-- Brokerage fields → use agent brokerage name.
-- Buyer/client fields → use lead name, address, etc.
-- Date fields → use today's date from agent data.
-- Leave any field containing "signature" or "initial" as "" — signatures are added separately.
-- Return ONLY a valid JSON object mapping field names to string values. No explanation.`;
+- Brokerage fields (the brokerage company name) → use agentData.brokerage.
+- Salesperson / agent name → use agentData.name.
+- Buyer name / client name → use leadData.name.
+- Buyer address / client address → use leadData.address.
+- Date fields → use agentData.date.
+- Commission / remuneration percentage fields → leave as "".
+- Any field that looks like a signature or initials box → leave as "".
+- For fields you cannot determine, use "".
+- Return ONLY a valid JSON object where keys are field indices (as strings: "0", "1", ...) and values are the string to fill. Cover all ${Math.min(fieldNames.length, 80)} indices.
+- No explanation, no markdown fences.`;
 
       const result = await generateWithFallback(ai, {
         contents: [{
@@ -90,8 +105,9 @@ Rules:
         }],
       });
       const raw = (result?.text || '').trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
-      fieldMap = JSON.parse(raw);
-      console.log(`[Prefill] Gemini Vision mapped ${Object.values(fieldMap).filter(v => v).length} fields for ${stepId}`);
+      indexedMap = JSON.parse(raw);
+      const filled_preview = Object.values(indexedMap).filter(v => v && v.trim()).length;
+      console.log(`[Prefill] Gemini Vision mapped ${filled_preview} non-empty fields (index-based) for ${stepId}`);
     } else {
       // Normal AcroForm: map by readable field names
       const prompt = `You are filling a PDF form for a real estate transaction in Ontario, Canada.
@@ -123,18 +139,23 @@ Rules:
   }
 
   let filled = 0;
-  for (const field of fields) {
-    const value = fieldMap[field.getName()];
-    if (!value) continue;
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i];
+    // For XFA forms use index-based lookup; for normal AcroForms use name-based lookup
+    const value = hasGarbledNames ? indexedMap[String(i)] : fieldMap[field.getName()];
+    if (!value || !value.trim()) continue;
     try {
       if (field.constructor.name === 'PDFTextField') {
         (field as any).setText(String(value));
         filled++;
+        console.log(`[Prefill] Set field[${i}] = "${value.substring(0, 40)}"`);
       } else if (field.constructor.name === 'PDFCheckBox' && ['true', 'yes', '1'].includes(value)) {
         (field as any).check();
         filled++;
       }
-    } catch { /* skip unwritable fields */ }
+    } catch (setErr: any) {
+      console.warn(`[Prefill] Could not set field[${i}]:`, setErr.message);
+    }
   }
 
   // Regenerate appearance streams so Chrome renders the filled values visually.
@@ -145,8 +166,9 @@ Rules:
       const { StandardFonts } = await import('pdf-lib');
       const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
       form.updateFieldAppearances(font);
-    } catch (appErr) {
-      console.warn('[Prefill] Could not update field appearances:', appErr);
+      console.log(`[Prefill] updateFieldAppearances OK for ${stepId}`);
+    } catch (appErr: any) {
+      console.warn('[Prefill] updateFieldAppearances failed:', appErr.message);
     }
   }
 
@@ -709,8 +731,10 @@ Return only the JSON object, no markdown, no explanation.`,
         (async () => {
           try {
             const cacheKey = `${leadId}:bra`;
-            const existing = prefilledPdfCache.get(cacheKey);
-            if (existing && Date.now() - existing.cachedAt < PREFILL_CACHE_TTL_MS) return;
+            // Always overwrite — FINTRAC provides verified ID data which is more
+            // accurate than any earlier pre-warm done with intake-form data.
+            prefilledPdfCache.delete(cacheKey);
+            prefillInFlight.delete(cacheKey);
 
             const result = await buildPrefillPdf({
               stepId: agentBraUrl ? undefined : 'bra',
