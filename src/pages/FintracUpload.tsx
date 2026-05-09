@@ -28,6 +28,8 @@ export default function FintracUpload() {
   const [leadEmail, setLeadEmail]   = useState('');
   const [agentEmail, setAgentEmail] = useState('');
   const [agentName, setAgentName]   = useState('');
+  const [agentBrokerage, setAgentBrokerage] = useState('');
+  const [agentBraUrl, setAgentBraUrl] = useState<string | null>(null);
   const [loading, setLoading]       = useState(true);
   const [alreadyDone, setAlreadyDone] = useState(false);
 
@@ -52,8 +54,11 @@ export default function FintracUpload() {
       if (aid) {
         const agentDoc = await getDoc(doc(db, 'agents', aid));
         if (agentDoc.exists()) {
-          setAgentEmail(agentDoc.data().email || '');
-          setAgentName(agentDoc.data().name || '');
+          const agentData = agentDoc.data();
+          setAgentEmail(agentData.email || '');
+          setAgentName(agentData.name || '');
+          setAgentBrokerage(agentData.brokerage || '');
+          setAgentBraUrl(agentData.documents?.bra?.url || null);
         }
       }
       setLoading(false);
@@ -96,6 +101,8 @@ export default function FintracUpload() {
           leadName,
           agentEmail,
           agentName,
+          agentBrokerage,
+          agentBraUrl,
         }),
       });
 
@@ -107,23 +114,29 @@ export default function FintracUpload() {
       const { extractedData, submittedAt } = await res.json();
 
       // Write extracted data + completion to Firestore client-side
-      // Raw ID is NOT saved — only the structured text fields
-      await updateDoc(doc(db, 'leads', leadId), {
+      // Also update name/address with verified ID data so BRA gets accurate info
+      const leadUpdate: Record<string, any> = {
         fintracData: {
           idType,
-          fullName:    extractedData?.fullName    || '',
-          dateOfBirth: extractedData?.dateOfBirth || '',
-          address:     extractedData?.address     || '',
-          idNumber:    extractedData?.idNumber    || '',
-          expiryDate:  extractedData?.expiryDate  || '',
+          fullName:     extractedData?.fullName    || '',
+          dateOfBirth:  extractedData?.dateOfBirth || '',
+          address:      extractedData?.address     || '',
+          idNumber:     extractedData?.idNumber    || '',
+          expiryDate:   extractedData?.expiryDate  || '',
           jurisdiction: extractedData?.jurisdiction || '',
-          country:     extractedData?.country     || '',
-          submittedAt: submittedAt || new Date().toISOString(),
-          submittedBy: leadName,
+          country:      extractedData?.country     || '',
+          submittedAt:  submittedAt || new Date().toISOString(),
+          submittedBy:  leadName,
         },
         [`signatures.fintrac`]: { signerName: leadName, signedAt: submittedAt || new Date().toISOString(), docLabel: 'FINTRAC ID Record' },
         completedSteps: arrayUnion('fintrac'),
-      });
+      };
+      // Update with verified legal name and address from government ID
+      if (extractedData?.fullName)  leadUpdate.name = extractedData.fullName;
+      if (extractedData?.address)   leadUpdate.currentAddress = extractedData.address;
+      if (extractedData?.dateOfBirth) leadUpdate.dateOfBirth = extractedData.dateOfBirth;
+
+      await updateDoc(doc(db, 'leads', leadId), leadUpdate);
 
       setStage('done');
     } catch (err: any) {

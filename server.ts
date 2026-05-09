@@ -45,35 +45,56 @@ async function buildPrefillPdf(params: {
     pdfBytes = fs.readFileSync(localPath);
   }
 
-  // XFA detection — two methods for reliability
-  const rawXfa = pdfBytes.includes(Buffer.from('/XFA')) || pdfBytes.includes(Buffer.from('<XFA:'));
-  if (rawXfa) {
-    console.warn(`[Prefill] XFA form detected (raw bytes) for stepId=${stepId} — returning original`);
-    return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
-  }
-
   const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
-  try {
-    const acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
-    if (acroFormRef) {
-      const acroForm = pdfDoc.context.lookup(acroFormRef) as any;
-      if (acroForm?.get?.(PDFName.of('XFA'))) {
-        console.warn(`[Prefill] XFA form detected (catalog) for stepId=${stepId} — returning original`);
-        return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
-      }
-    }
-  } catch { /* non-critical */ }
-
   const form = pdfDoc.getForm();
   const fields = form.getFields();
   const fieldNames = fields.map(f => f.getName());
 
   if (fieldNames.length === 0) return { pdf: pdfBytes.toString('base64'), fieldsFilled: 0 };
 
+  // Detect XFA forms by checking for garbled/non-ASCII field names.
+  // XFA PDFs store field names as binary identifiers — Gemini can't map them by name.
+  // Fall back to Gemini Vision: send the PDF itself so Gemini can visually identify fields.
+  const hasGarbledNames = fieldNames.filter(n => /[^\x20-\x7E]/.test(n) || n.trim().length < 2).length > fieldNames.length * 0.3;
+  console.log(`[Prefill] stepId=${stepId} fields=${fieldNames.length} garbled=${hasGarbledNames}`);
+
   let fieldMap: Record<string, string> = {};
   try {
     const ai = getAI();
-    const prompt = `You are filling a PDF form for a real estate transaction in Ontario, Canada.
+
+    if (hasGarbledNames) {
+      // XFA form: use Gemini Vision — send the PDF so Gemini can visually map fields
+      const visionPrompt = `This is a real estate PDF form (likely OREA Form 300 Buyer Representation Agreement) with encrypted internal field names. The actual field names in the PDF are: ${JSON.stringify(fieldNames.slice(0, 60))}
+
+Using the visual layout of the form, map each field name to the correct value from the data below.
+
+Lead/Client data: ${JSON.stringify(leadData, null, 2)}
+Agent/Realtor data: ${JSON.stringify(agentData, null, 2)}
+
+Rules:
+- Look at the form visually to understand what each field is for.
+- Match each field name to the correct value based on its visual context.
+- Brokerage fields → use agent brokerage name.
+- Buyer/client fields → use lead name, address, etc.
+- Date fields → use today's date from agent data.
+- Leave any field containing "signature" or "initial" as "" — signatures are added separately.
+- Return ONLY a valid JSON object mapping field names to string values. No explanation.`;
+
+      const result = await generateWithFallback(ai, {
+        contents: [{
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType: 'application/pdf', data: pdfBytes.toString('base64') } },
+            { text: visionPrompt },
+          ],
+        }],
+      });
+      const raw = (result?.text || '').trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
+      fieldMap = JSON.parse(raw);
+      console.log(`[Prefill] Gemini Vision mapped ${Object.values(fieldMap).filter(v => v).length} fields for ${stepId}`);
+    } else {
+      // Normal AcroForm: map by readable field names
+      const prompt = `You are filling a PDF form for a real estate transaction in Ontario, Canada.
 Here are the PDF form field names:
 ${JSON.stringify(fieldNames)}
 
@@ -91,11 +112,12 @@ Rules:
 - Leave signature fields (containing the word "signature") as empty string "" — signatures will be embedded separately.
 - For fields you cannot match, use an empty string "".
 - Only return the JSON object, no explanation.`;
-    const result = await generateWithFallback(ai, {
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    });
-    const raw = (result?.text || '').trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
-    fieldMap = JSON.parse(raw);
+      const result = await generateWithFallback(ai, {
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      });
+      const raw = (result?.text || '').trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
+      fieldMap = JSON.parse(raw);
+    }
   } catch (geminiErr) {
     console.warn('[Prefill] Gemini mapping failed, leaving fields blank:', geminiErr);
   }
@@ -503,7 +525,8 @@ async function startServer() {
   // Lead submits their government ID. Gemini Vision extracts fields.
   // Raw ID is emailed to agent and NOT stored anywhere on the server.
   app.post('/api/fintrac-submit', async (req, res) => {
-    const { leadId, idType, idFile, mimeType, leadEmail, leadName, agentEmail, agentName } = req.body;
+    const { leadId, idType, idFile, mimeType, leadEmail, leadName, agentEmail, agentName,
+            agentBrokerage, agentBraUrl } = req.body;
     if (!leadId || !idFile || !mimeType || !agentEmail) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -600,10 +623,11 @@ Return only the JSON object, no markdown, no explanation.`,
         ].filter(([, v]) => v).map(([k, v]) => `
           <tr><td style="color:#888;padding:5px 0;width:140px;">${k}</td><td style="font-weight:700;">${v}</td></tr>`).join('');
 
-        // Email 1 → Agent: ID attached, extracted data, link to FINTRAC record
+        // Email 1 → Agent (TO) + Lead (CC): ID attached, extracted data, link to FINTRAC record
         await resend.emails.send({
           from: 'LeadCrest <notifications@leistly.com>',
           to: agentEmail,
+          cc: leadEmail ? [leadEmail] : undefined,
           subject: `🪪 ${leadName} submitted ID for FINTRAC verification`,
           attachments: [{ filename: idFilename, content: fileBuffer, contentType: mimeType }],
           html: `
@@ -666,48 +690,28 @@ Return only the JSON object, no markdown, no explanation.`,
       res.json({ success: true, extractedData, submittedAt });
 
       // ── Pre-warm BRA cache in the background ──────────────────────────
-      // ID is now verified and lead data updated — kick off BRA prefill so
-      // the document is ready by the time the agent sends the BRA email.
-      // This runs after the response is sent so it doesn't block the lead.
-      if (adminDb && leadId) {
+      // Uses client-supplied agent data (no Firebase Admin needed).
+      // BRA is ready by the time the agent clicks Send Email.
+      if (leadId) {
         (async () => {
           try {
             const cacheKey = `${leadId}:bra`;
-            // Skip if already cached
             const existing = prefilledPdfCache.get(cacheKey);
             if (existing && Date.now() - existing.cachedAt < PREFILL_CACHE_TTL_MS) return;
 
-            // Look up agent custom BRA doc and brokerage from Firestore
-            const leadSnap = await adminDb.collection('leads').doc(leadId).get();
-            const leadDocData = leadSnap.data() || {};
-            const agentId = leadDocData.agentId;
-            let agentDocData: Record<string, any> = {};
-            if (agentId) {
-              const agentSnap = await adminDb.collection('agents').doc(agentId).get();
-              agentDocData = agentSnap.data() || {};
-            }
-
-            const customBraUrl: string | null = agentDocData.documents?.bra?.url || null;
-            const verifiedName = extractedData.fullName || leadDocData.name || '';
-            const verifiedAddress = extractedData.address || leadDocData.currentAddress || '';
-
             const result = await buildPrefillPdf({
-              stepId: 'bra',
-              pdfUrl: customBraUrl,
+              stepId: agentBraUrl ? undefined : 'bra',
+              pdfUrl: agentBraUrl || null,
               leadData: {
-                name: verifiedName,
-                email: leadDocData.email || leadEmail || '',
-                phone: leadDocData.phone || '',
-                address: verifiedAddress,
+                name: extractedData.fullName || leadName || '',
+                email: leadEmail || '',
+                address: extractedData.address || '',
                 dateOfBirth: extractedData.dateOfBirth || '',
-                budget: leadDocData.budget || '',
-                timeline: leadDocData.timeline || '',
-                type: leadDocData.type || '',
               },
               agentData: {
-                name: agentDocData.name || agentName || '',
-                email: agentDocData.email || agentEmail || '',
-                brokerage: agentDocData.brokerage || '',
+                name: agentName || '',
+                email: agentEmail || '',
+                brokerage: agentBrokerage || '',
                 date: new Date().toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' }),
               },
             });
