@@ -853,7 +853,8 @@ Return only the JSON object, no markdown, no explanation.`,
               const pages = pdfDoc.getPages();
               const form = pdfDoc.getForm();
               const allFields = form.getFields();
-              console.log(`[Sign] PDF fields found: ${allFields.map(f => f.getName()).join(', ')}`);
+              const readableFields = allFields.map(f => f.getName()).filter(n => /^[\x20-\x7E]+$/.test(n));
+              console.log(`[Sign] PDF fields found: ${allFields.length} total, ${readableFields.length} readable: ${readableFields.slice(0, 10).join(', ')}`);
 
               let placed = false;
 
