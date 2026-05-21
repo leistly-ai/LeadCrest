@@ -6,52 +6,60 @@ import { Check, ArrowRight, Shield, Zap, Crown } from 'lucide-react';
 
 const PLANS = [
   {
-    id: 'basic',
-    name: 'Basic',
-    price: '$79',
-    period: 'per month',
-    description: 'Perfect for individual agents starting out.',
+    id: 'starter',
+    name: 'Starter',
+    price: 'Free',
+    period: 'forever',
+    description: 'Try LeadCrest with basic lead capture.',
     features: [
-      'Up to 5 qualified leads per month',
-      'QR Code generation',
-      'WhatsApp flow simulation',
-      'Basic lead scoring',
-      '30-day free trial',
+      'Up to 5 leads per month',
+      'Basic lead scoring (0-100)',
+      'Web-based chat qualification',
+      'Lead dashboard',
+      'Email notifications',
     ],
     icon: <Zap className="w-6 h-6 text-honey" />,
-    popular: false
+    popular: false,
+    priceDetail: 'No credit card required'
   },
   {
-    id: 'pro',
-    name: 'Pro',
-    price: '$249',
+    id: 'professional',
+    name: 'Professional',
+    price: '$149',
     period: 'per month',
-    description: 'Ideal for active agents with growing pipelines.',
+    description: 'Pre-qualified, verified leads ready to close.',
     features: [
-      'Up to 20 qualified leads per month',
-      'Advanced lead scoring',
-      'Soft credit check integration',
-      'LinkedIn validation',
-      'Priority support',
+      'Up to 50 leads per month',
+      'Advanced lead scoring + AI insights',
+      '10 soft credit checks included',
+      'Employment verification (Plaid)',
+      'Automated document signing',
+      'FINTRAC compliance tracking',
+      'Priority email support',
     ],
     icon: <Shield className="w-6 h-6 text-sage" />,
-    popular: true
+    popular: true,
+    priceDetail: '$2 per additional credit check'
   },
   {
     id: 'enterprise',
     name: 'Enterprise',
-    price: '$449',
+    price: '$349',
     period: 'per month',
-    description: 'For high-volume agents and small teams.',
+    description: 'Full-service lead-to-close automation.',
     features: [
-      'Up to 50 qualified leads per month',
-      'Hard credit check integration',
-      'Automated document generation',
-      'Ontario LTB contract builder',
-      'Custom branding',
+      'Unlimited leads',
+      'Unlimited credit checks included',
+      'Hard credit checks (Equifax/TransUnion)',
+      'Multi-agent team access',
+      'Custom branding & white-label',
+      'API access',
+      'Dedicated account manager',
+      'Transaction pipeline management',
     ],
     icon: <Crown className="w-6 h-6 text-midnight" />,
-    popular: false
+    popular: false,
+    priceDetail: 'Custom enterprise features available'
   }
 ];
 
@@ -107,16 +115,18 @@ export default function Pricing() {
 
             <div className="space-y-4">
               <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
-                plan.id === 'free' ? 'bg-honey/10' : plan.id === 'basic' ? 'bg-sage/10' : 'bg-midnight/10'
+                plan.id === 'starter' ? 'bg-honey/10' : plan.id === 'professional' ? 'bg-sage/10' : 'bg-midnight/10'
               }`}>
                 {plan.icon}
               </div>
               <div>
                 <h3 className="text-xl font-bold text-midnight">{plan.name}</h3>
-                <div className="flex items-baseline gap-1">
+                <p className="text-xs text-charcoal/60 mt-1">{plan.description}</p>
+                <div className="flex items-baseline gap-1 mt-3">
                   <span className="text-4xl font-black text-midnight">{plan.price}</span>
                   <span className="text-sm text-charcoal/40 font-medium">{plan.period}</span>
                 </div>
+                <p className="text-[10px] text-honey font-bold uppercase tracking-wider mt-1">{plan.priceDetail}</p>
               </div>
             </div>
 

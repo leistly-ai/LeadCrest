@@ -1,4 +1,4 @@
-export type SubscriptionTier = 'free' | 'basic' | 'pro' | 'enterprise';
+export type SubscriptionTier = 'starter' | 'professional' | 'enterprise';
 
 export interface Agent {
   uid: string;
@@ -51,11 +51,33 @@ export interface Lead {
     company: string;
     salary: string;
     validated: boolean;
+    verifiedAt?: string;
+    plaidVerificationId?: string;
   };
-  softCreditCheck?: {
-    rating: string;
+  creditCheck?: {
+    type: 'soft' | 'hard';
+    score?: number;
+    rating?: string; // 'excellent' | 'good' | 'fair' | 'poor'
     defaults: boolean;
-    source: string;
+    provider: string; // 'equifax' | 'transunion' | 'manual'
+    checkedAt: string;
+    cost: number; // Track cost for usage billing
+  };
+  linkedInProfile?: {
+    url: string;
+    verified: boolean;
+    verifiedAt?: string;
+  };
+  verification: {
+    creditCheckCompleted: boolean;
+    employmentVerified: boolean;
+    identityVerified: boolean;
+    lastVerifiedAt?: string;
+  };
+  usageCosts?: {
+    creditChecks: number;
+    employmentChecks: number;
+    total: number;
   };
   documents?: string[];
   createdAt: string;
