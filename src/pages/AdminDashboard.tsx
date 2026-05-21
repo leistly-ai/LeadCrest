@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, doc, updateDoc, orderBy } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { motion } from 'motion/react';
-import { Users, ShieldCheck, ShieldAlert, CreditCard, Search, Filter, CheckCircle2, XCircle, Power, PowerOff, BadgeCheck } from 'lucide-react';
+import { Users, ShieldCheck, ShieldAlert, CreditCard, Search, Filter, CheckCircle2, XCircle, Power, PowerOff, BadgeCheck, Star, MessageSquare } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Agent } from '../types';
 import { handleFirestoreError, OperationType } from '../utils/firestore-errors';
@@ -17,12 +17,22 @@ interface Payment {
   createdAt: string;
 }
 
+interface DemoFeedback {
+  id: string;
+  rating: string;
+  wouldUse: string;
+  mostValuable: string;
+  completedAt: string;
+  source: string;
+}
+
 export default function AdminDashboard() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [demoFeedback, setDemoFeedback] = useState<DemoFeedback[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState<'agents' | 'payments'>('agents');
+  const [activeTab, setActiveTab] = useState<'agents' | 'payments' | 'feedback'>('agents');
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -34,6 +44,7 @@ export default function AdminDashboard() {
 
     const agentsQuery = query(collection(db, 'agents'), orderBy('createdAt', 'desc'));
     const paymentsQuery = query(collection(db, 'payments'), orderBy('createdAt', 'desc'));
+    const feedbackQuery = query(collection(db, 'demo-feedback'), orderBy('completedAt', 'desc'));
 
     const unsubAgents = onSnapshot(agentsQuery, (snapshot) => {
       setAgents(snapshot.docs.map(doc => ({ ...doc.data() } as Agent)));
@@ -48,9 +59,16 @@ export default function AdminDashboard() {
       handleFirestoreError(error, OperationType.LIST, 'payments');
     });
 
+    const unsubFeedback = onSnapshot(feedbackQuery, (snapshot) => {
+      setDemoFeedback(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DemoFeedback)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'demo-feedback');
+    });
+
     return () => {
       unsubAgents();
       unsubPayments();
+      unsubFeedback();
     };
   }, [navigate]);
 
@@ -112,6 +130,14 @@ export default function AdminDashboard() {
             }`}
           >
             Transactions
+          </button>
+          <button
+            onClick={() => setActiveTab('feedback')}
+            className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${
+              activeTab === 'feedback' ? 'bg-white text-midnight shadow-sm' : 'text-charcoal/40 hover:text-charcoal'
+            }`}
+          >
+            Demo Feedback
           </button>
         </div>
       </div>
@@ -210,7 +236,7 @@ export default function AdminDashboard() {
             </div>
           </div>
         </div>
-      ) : (
+      ) : activeTab === 'payments' ? (
         <div className="bg-white rounded-[2.5rem] border border-zinc-100 shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
@@ -254,6 +280,103 @@ export default function AdminDashboard() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-white p-8 rounded-3xl border border-zinc-100 shadow-sm">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 rounded-xl bg-honey/10 flex items-center justify-center">
+                  <MessageSquare className="w-6 h-6 text-honey" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-charcoal/40">Total Responses</p>
+                  <p className="text-3xl font-black text-midnight">{demoFeedback.length}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white p-8 rounded-3xl border border-zinc-100 shadow-sm">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 rounded-xl bg-sage/10 flex items-center justify-center">
+                  <CheckCircle2 className="w-6 h-6 text-sage" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-charcoal/40">Would Use Service</p>
+                  <p className="text-3xl font-black text-midnight">
+                    {demoFeedback.filter(f => f.wouldUse.toLowerCase().includes('yes')).length}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white p-8 rounded-3xl border border-zinc-100 shadow-sm">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 rounded-xl bg-midnight/10 flex items-center justify-center">
+                  <Star className="w-6 h-6 text-midnight" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-charcoal/40">Excellent Ratings</p>
+                  <p className="text-3xl font-black text-midnight">
+                    {demoFeedback.filter(f => f.rating.toLowerCase().includes('excellent')).length}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-[2.5rem] border border-zinc-100 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-zinc-50/50 border-b border-zinc-100">
+                    <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-charcoal/40">Date</th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-charcoal/40">Experience Rating</th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-charcoal/40">Would Use?</th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-charcoal/40">Most Valuable</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-50">
+                  {demoFeedback.map((feedback) => (
+                    <tr key={feedback.id} className="hover:bg-zinc-50/30 transition-colors">
+                      <td className="px-8 py-6 text-sm text-charcoal/60">
+                        {new Date(feedback.completedAt).toLocaleDateString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </td>
+                      <td className="px-8 py-6">
+                        <span className={`px-3 py-1.5 rounded-full text-xs font-bold ${
+                          feedback.rating.toLowerCase().includes('excellent')
+                            ? 'bg-sage/10 text-sage'
+                            : feedback.rating.toLowerCase().includes('good')
+                            ? 'bg-honey/10 text-honey'
+                            : 'bg-zinc-100 text-charcoal/60'
+                        }`}>
+                          {feedback.rating}
+                        </span>
+                      </td>
+                      <td className="px-8 py-6">
+                        <span className={`px-3 py-1.5 rounded-full text-xs font-bold ${
+                          feedback.wouldUse.toLowerCase().includes('yes')
+                            ? 'bg-sage/10 text-sage'
+                            : 'bg-zinc-100 text-charcoal/60'
+                        }`}>
+                          {feedback.wouldUse}
+                        </span>
+                      </td>
+                      <td className="px-8 py-6 text-sm text-charcoal/80">
+                        {feedback.mostValuable}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}

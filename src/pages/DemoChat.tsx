@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Send, User, MessageSquare, CheckCircle2, Phone, Mail, MapPin, Briefcase, DollarSign, Clock, Home, Target, CreditCard, Star, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { collection, addDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 
 interface Message {
   id: string;
@@ -76,9 +78,9 @@ export default function DemoChat() {
           }]);
         }, 1000);
       } else {
-        // All feedback collected
+        // All feedback collected - save to Firestore
         setIsTyping(true);
-        setTimeout(() => {
+        setTimeout(async () => {
           setIsTyping(false);
           setMessages(prev => [...prev, {
             id: 'final-thanks',
@@ -86,6 +88,20 @@ export default function DemoChat() {
             sender: 'bot'
           }]);
           setIsFinished(true);
+
+          // Save demo feedback to Firestore
+          try {
+            await addDoc(collection(db, 'demo-feedback'), {
+              rating: newFeedback.rating || '',
+              wouldUse: newFeedback.wouldUse || '',
+              mostValuable: newFeedback.mostValuable || '',
+              completedAt: new Date().toISOString(),
+              source: 'demo-chat'
+            });
+            console.log('[DemoChat] Feedback saved successfully');
+          } catch (error) {
+            console.error('[DemoChat] Failed to save feedback:', error);
+          }
         }, 1500);
       }
       return;
