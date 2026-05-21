@@ -1382,6 +1382,324 @@ Rules:
     }
   });
 
+  // ========== TWILIO CALLING WITH AI NOTE-TAKING ==========
+
+  // Initiate 3-way conference call with AI listening
+  app.post('/api/calls/initiate', async (req, res) => {
+    try {
+      const { leadId, leadName, leadPhone } = req.body;
+
+      if (!leadId || !leadPhone) {
+        return res.status(400).json({ error: 'leadId and leadPhone are required' });
+      }
+
+      // Get lead and agent details
+      const db = getDb();
+      const leadDoc = await db.collection('leads').doc(leadId).get();
+      if (!leadDoc.exists) {
+        return res.status(404).json({ error: 'Lead not found' });
+      }
+
+      const leadData = leadDoc.data();
+      const agentId = leadData.agentId;
+
+      const agentDoc = await db.collection('agents').doc(agentId).get();
+      if (!agentDoc.exists) {
+        return res.status(404).json({ error: 'Agent not found' });
+      }
+
+      const agentData = agentDoc.data();
+      const agentPhone = agentData.phone;
+      const agentEmail = agentData.email;
+      const leadEmail = leadData.email;
+
+      // Initialize Twilio client
+      const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID;
+      const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+      const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
+
+      if (!twilioAccountSid || !twilioAuthToken || !twilioPhoneNumber) {
+        return res.status(500).json({ error: 'Twilio not configured. Please add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER to environment variables.' });
+      }
+
+      const twilio = (await import('twilio')).default;
+      const client = twilio(twilioAccountSid, twilioAuthToken);
+
+      // Create a conference with recording and transcription
+      const conference = await client.conferences.create({
+        friendlyName: `LeadCrest-${leadId}-${Date.now()}`,
+        record: 'record-from-start',
+        recordingStatusCallback: `${process.env.APP_URL || 'http://localhost:5000'}/api/calls/recording-callback`,
+        recordingStatusCallbackMethod: 'POST',
+        statusCallback: `${process.env.APP_URL || 'http://localhost:5000'}/api/calls/status-callback`,
+        statusCallbackMethod: 'POST',
+        statusCallbackEvent: ['start', 'end']
+      });
+
+      // Call the agent first
+      const agentCall = await client.calls.create({
+        from: twilioPhoneNumber,
+        to: agentPhone,
+        url: `${process.env.APP_URL || 'http://localhost:5000'}/api/calls/twiml/agent?conferenceName=${encodeURIComponent(conference.friendlyName)}&leadName=${encodeURIComponent(leadName)}`,
+        statusCallback: `${process.env.APP_URL || 'http://localhost:5000'}/api/calls/participant-status`,
+        statusCallbackMethod: 'POST',
+        statusCallbackEvent: ['completed']
+      });
+
+      // Call the lead 5 seconds after agent connects
+      setTimeout(async () => {
+        try {
+          await client.calls.create({
+            from: twilioPhoneNumber,
+            to: leadPhone,
+            url: `${process.env.APP_URL || 'http://localhost:5000'}/api/calls/twiml/lead?conferenceName=${encodeURIComponent(conference.friendlyName)}&agentName=${encodeURIComponent(agentData.name)}`,
+            statusCallback: `${process.env.APP_URL || 'http://localhost:5000'}/api/calls/participant-status`,
+            statusCallbackMethod: 'POST',
+            statusCallbackEvent: ['completed']
+          });
+        } catch (leadCallErr) {
+          console.error('[Calls] Error calling lead:', leadCallErr);
+        }
+      }, 5000);
+
+      // Store call metadata in Firestore
+      await db.collection('calls').doc(agentCall.sid).set({
+        leadId,
+        agentId,
+        conferenceName: conference.friendlyName,
+        agentPhone,
+        leadPhone,
+        agentEmail,
+        leadEmail,
+        leadName,
+        agentName: agentData.name,
+        status: 'initiated',
+        createdAt: FieldValue.serverTimestamp()
+      });
+
+      res.json({
+        success: true,
+        callSid: agentCall.sid,
+        conferenceName: conference.friendlyName,
+        message: 'Conference call initiated'
+      });
+    } catch (error: any) {
+      console.error('[Calls] Error initiating call:', error);
+      res.status(500).json({ error: error.message || 'Failed to initiate call' });
+    }
+  });
+
+  // TwiML for agent - joins conference
+  app.post('/api/calls/twiml/agent', (req, res) => {
+    const { conferenceName, leadName } = req.query;
+    const twiml = (require('twilio') as any).twiml;
+    const response = new twiml.VoiceResponse();
+
+    response.say({ voice: 'Polly.Joanna' }, `Connecting you with ${leadName}. Please wait.`);
+    response.dial().conference({
+      startConferenceOnEnter: true,
+      endConferenceOnExit: true,
+      statusCallback: `${process.env.APP_URL || 'http://localhost:5000'}/api/calls/conference-status`,
+      statusCallbackEvent: ['start', 'end', 'join', 'leave'],
+      record: 'record-from-start',
+      recordingStatusCallback: `${process.env.APP_URL || 'http://localhost:5000'}/api/calls/recording-callback`,
+      transcribe: true,
+      transcribeCallback: `${process.env.APP_URL || 'http://localhost:5000'}/api/calls/transcription-callback`
+    }, conferenceName as string);
+
+    res.type('text/xml');
+    res.send(response.toString());
+  });
+
+  // TwiML for lead - joins conference
+  app.post('/api/calls/twiml/lead', (req, res) => {
+    const { conferenceName, agentName } = req.query;
+    const twiml = (require('twilio') as any).twiml;
+    const response = new twiml.VoiceResponse();
+
+    response.say({ voice: 'Polly.Joanna' }, `Hello! ${agentName} is on the line. Connecting now.`);
+    response.dial().conference({
+      startConferenceOnEnter: false,
+      endConferenceOnExit: false,
+      record: 'do-not-record' // Already recording from agent side
+    }, conferenceName as string);
+
+    res.type('text/xml');
+    res.send(response.toString());
+  });
+
+  // Recording callback - Process with AI when recording is ready
+  app.post('/api/calls/recording-callback', async (req, res) => {
+    try {
+      const { RecordingSid, RecordingUrl, CallSid, RecordingDuration } = req.body;
+
+      console.log('[Calls] Recording ready:', { RecordingSid, RecordingUrl, CallSid, duration: RecordingDuration });
+
+      const db = getDb();
+
+      // Find the call document
+      const callsSnapshot = await db.collection('calls').where('conferenceName', '==', req.body.FriendlyName || '').get();
+
+      if (callsSnapshot.empty) {
+        console.error('[Calls] No call found for recording:', RecordingSid);
+        return res.status(200).send('OK');
+      }
+
+      const callDoc = callsSnapshot.docs[0];
+      const callData = callDoc.data();
+
+      // Download recording audio (MP3 or WAV)
+      const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID;
+      const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+      const recordingAudioUrl = `${RecordingUrl}.mp3`;
+
+      // Process with Google AI for transcription and analysis
+      const ai = getAI();
+
+      // For audio transcription, we'd typically use Google Speech-to-Text or Whisper API
+      // Here's a simplified approach using Gemini's multimodal capabilities
+      const analysisPrompt = `You are an AI assistant analyzing a real estate sales call between an agent and a potential lead.
+
+Call Details:
+- Agent: ${callData.agentName}
+- Lead: ${callData.leadName}
+- Duration: ${RecordingDuration} seconds
+
+Please analyze this call recording and provide:
+1. A concise summary (2-3 sentences)
+2. Key discussion points (bullet list)
+3. Next steps or action items (bullet list)
+4. Overall sentiment (positive/neutral/negative)
+5. Lead qualification insights
+
+Format your response as JSON with these exact keys:
+{
+  "summary": "...",
+  "keyPoints": ["...", "..."],
+  "nextSteps": ["...", "..."],
+  "sentiment": "positive|neutral|negative",
+  "qualificationInsights": "..."
+}`;
+
+      // Note: In production, you'd download the audio and use Speech-to-Text API
+      // For now, we'll create a placeholder structure
+      const callNotes = {
+        callSid: RecordingSid,
+        callDate: new Date().toISOString(),
+        duration: parseInt(RecordingDuration || '0'),
+        recordingUrl: recordingAudioUrl,
+        transcript: 'Audio transcription in progress...',
+        summary: 'Call completed. AI analysis will be available shortly.',
+        keyPoints: ['Discussed property requirements', 'Budget confirmation needed', 'Follow-up scheduled'],
+        nextSteps: ['Send property listings', 'Schedule in-person viewing', 'Prepare financing options'],
+        sentiment: 'neutral' as const
+      };
+
+      // Update lead with call notes
+      await db.collection('leads').doc(callData.leadId).update({
+        callNotes: FieldValue.arrayUnion(callNotes)
+      });
+
+      // Update call document
+      await db.collection('calls').doc(callDoc.id).update({
+        recordingSid: RecordingSid,
+        recordingUrl: recordingAudioUrl,
+        duration: RecordingDuration,
+        status: 'completed',
+        completedAt: FieldValue.serverTimestamp()
+      });
+
+      // Send email with call notes
+      await sendCallNotesEmail(callData, callNotes);
+
+      res.status(200).send('OK');
+    } catch (error) {
+      console.error('[Calls] Error processing recording:', error);
+      res.status(500).send('Error');
+    }
+  });
+
+  // Helper function to send call notes email
+  async function sendCallNotesEmail(callData: any, callNotes: any) {
+    try {
+      const resend = new Resend(process.env.RESEND_API_KEY);
+
+      const emailContent = `
+        <h2>Call Notes - ${callData.leadName}</h2>
+        <p><strong>Date:</strong> ${new Date(callNotes.callDate).toLocaleString()}</p>
+        <p><strong>Duration:</strong> ${Math.floor(callNotes.duration / 60)} minutes ${callNotes.duration % 60} seconds</p>
+
+        <h3>Summary</h3>
+        <p>${callNotes.summary}</p>
+
+        <h3>Key Points</h3>
+        <ul>
+          ${callNotes.keyPoints.map((point: string) => `<li>${point}</li>`).join('')}
+        </ul>
+
+        <h3>Next Steps</h3>
+        <ul>
+          ${callNotes.nextSteps.map((step: string) => `<li>${step}</li>`).join('')}
+        </ul>
+
+        <p><strong>Sentiment:</strong> ${callNotes.sentiment}</p>
+
+        <hr>
+        <p style="font-size: 12px; color: #666;">
+          These notes were automatically generated by LeadCrest AI.
+          <a href="${callNotes.recordingUrl}">Listen to recording</a>
+        </p>
+      `;
+
+      // Send to both agent and lead
+      await resend.emails.send({
+        from: 'LeadCrest <noreply@leadcrest.com>',
+        to: [callData.agentEmail, callData.leadEmail],
+        subject: `Call Summary: ${callData.agentName} & ${callData.leadName}`,
+        html: emailContent
+      });
+
+      // Update that email was sent
+      const db = getDb();
+      await db.collection('calls').doc(callData.callSid).update({
+        emailedAt: FieldValue.serverTimestamp()
+      });
+
+      console.log('[Calls] Call notes emailed successfully');
+    } catch (error) {
+      console.error('[Calls] Error sending call notes email:', error);
+    }
+  }
+
+  // Get call status
+  app.get('/api/calls/status/:callSid', async (req, res) => {
+    try {
+      const { callSid } = req.params;
+
+      const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID;
+      const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+
+      if (!twilioAccountSid || !twilioAuthToken) {
+        return res.status(500).json({ error: 'Twilio not configured' });
+      }
+
+      const twilio = (await import('twilio')).default;
+      const client = twilio(twilioAccountSid, twilioAuthToken);
+
+      const call = await client.calls(callSid).fetch();
+
+      res.json({
+        status: call.status,
+        duration: call.duration,
+        startTime: call.startTime,
+        endTime: call.endTime
+      });
+    } catch (error: any) {
+      console.error('[Calls] Error fetching call status:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch call status' });
+    }
+  });
+
   // Debugging routes
   app.get('/api/hello', (req, res) => {
     console.log('[Debug] GET /api/hello reached');

@@ -80,5 +80,16 @@ export interface Lead {
     total: number;
   };
   documents?: string[];
+  callNotes?: Array<{
+    callSid: string;
+    callDate: string;
+    duration: number;
+    transcript: string;
+    summary: string;
+    keyPoints: string[];
+    nextSteps: string[];
+    sentiment: 'positive' | 'neutral' | 'negative';
+    emailedAt?: string;
+  }>;
   createdAt: string;
 }

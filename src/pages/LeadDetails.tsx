@@ -11,6 +11,8 @@ import {
   UserCheck, CreditCard, Building2, Clock, Target, Home, DollarSign as BudgetIcon, Linkedin, ExternalLink, Edit2, Save, X, Upload, FileText
 } from 'lucide-react';
 import TransactionPipeline from '../components/TransactionPipeline';
+import CallLeadButton from '../components/CallLeadButton';
+import CallNotesHistory from '../components/CallNotesHistory';
 
 export default function LeadDetails() {
   const { id } = useParams();
@@ -154,7 +156,15 @@ export default function LeadDetails() {
         >
           <ArrowLeft className="w-4 h-4" /> Back to Dashboard
         </button>
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-center">
+          <CallLeadButton
+            leadId={lead.id}
+            leadName={lead.name}
+            leadPhone={lead.phone}
+            onCallInitiated={() => {
+              console.log('Call initiated for lead:', lead.id);
+            }}
+          />
           <span className={`px-4 py-2 rounded-full text-xs font-bold uppercase tracking-widest flex items-center gap-2 ${
             lead.status === 'hot' ? 'bg-red-100 text-red-600' :
             lead.status === 'warm' ? 'bg-honey/10 text-honey' :
@@ -433,6 +443,9 @@ export default function LeadDetails() {
           </div>
         </div>
       </div>
+
+      {/* Call History */}
+      <CallNotesHistory callNotes={lead.callNotes} />
 
       {/* Transaction Pipeline — full width below */}
       <div className="space-y-4">
