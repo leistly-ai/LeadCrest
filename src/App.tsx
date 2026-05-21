@@ -21,6 +21,7 @@ import CustomerChat from './pages/CustomerChat';
 import DemoChat from './pages/DemoChat';
 import Contacts from './pages/Contacts';
 import UsageDashboard from './pages/UsageDashboard';
+import EmailCampaigns from './pages/EmailCampaigns';
 import Navbar from './components/Navbar';
 import { ModalProvider } from './contexts/ModalContext';
 import GlobalModals from './components/GlobalModals';
@@ -297,6 +298,12 @@ export default function App() {
               <Route path="/usage" element={
                 <ProtectedRoute user={user} loading={loading}>
                   <UsageDashboard />
+                </ProtectedRoute>
+              } />
+
+              <Route path="/emails" element={
+                <ProtectedRoute user={user} loading={loading}>
+                  <EmailCampaigns />
                 </ProtectedRoute>
               } />
 

@@ -5,6 +5,7 @@ import { db } from '../firebase';
 import { Agent } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { Send, User, MessageSquare, CheckCircle2, Phone, Mail, MapPin, Briefcase, DollarSign, Clock, Home, Target, CreditCard } from 'lucide-react';
+import { scheduleWelcomeEmail } from '../utils/emailScheduler';
 
 interface Message {
   id: string;
@@ -108,7 +109,7 @@ export default function CustomerChat() {
         const status = score >= 70 ? 'hot' : score >= 45 ? 'warm' : 'cold';
 
         // Save to Firestore with all qualification fields
-        await addDoc(collection(db, 'leads'), {
+        const leadDoc = await addDoc(collection(db, 'leads'), {
           agentId,
           name: newAnswers.name || '',
           email: newAnswers.email || '',
@@ -126,11 +127,29 @@ export default function CustomerChat() {
             salary: newAnswers.salary || '',
             validated: false,
           },
+          verification: {
+            creditCheckCompleted: false,
+            employmentVerified: false,
+            identityVerified: false
+          },
           score,
           status,
           source: 'qr-chat',
           createdAt: new Date().toISOString(),
         });
+
+        // Schedule automated email drip campaign
+        try {
+          await scheduleWelcomeEmail(
+            leadDoc.id,
+            agentId,
+            newAnswers.email || '',
+            newAnswers.name || '',
+            agent?.name || 'Your Agent'
+          );
+        } catch (emailErr) {
+          console.error('Failed to schedule emails:', emailErr);
+        }
       }, 1500);
     }
   };

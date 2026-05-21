@@ -1160,6 +1160,36 @@ Return only the JSON object, no markdown, no explanation.`,
     }
   });
 
+  // Email automation endpoint
+  app.post('/api/send-email', async (req, res) => {
+    const { to, subject, html, text } = req.body;
+
+    if (!to || !subject || !html) {
+      return res.status(400).json({ error: 'Missing required fields: to, subject, html' });
+    }
+
+    try {
+      const resendKey = process.env.RESEND_API_KEY;
+      if (!resendKey) {
+        return res.status(500).json({ error: 'Email service not configured' });
+      }
+
+      const resend = new Resend(resendKey);
+      const result = await resend.emails.send({
+        from: 'LeadCrest <notifications@leistly.com>',
+        to,
+        subject,
+        html,
+        text: text || subject
+      });
+
+      res.json({ success: true, id: result.data?.id });
+    } catch (error: any) {
+      console.error('[Email Error]:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.post('/api/chat', async (req, res) => {
     const { message, agentId, history } = req.body;
     console.log(`[Simulator Chat] agentId: ${agentId}`);
