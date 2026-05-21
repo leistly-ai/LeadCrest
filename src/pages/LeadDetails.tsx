@@ -13,6 +13,7 @@ import {
 import TransactionPipeline from '../components/TransactionPipeline';
 import CallLeadButton from '../components/CallLeadButton';
 import CallNotesHistory from '../components/CallNotesHistory';
+import LeadEmailHistory from '../components/LeadEmailHistory';
 
 export default function LeadDetails() {
   const { id } = useParams();
@@ -446,6 +447,9 @@ export default function LeadDetails() {
 
       {/* Call History */}
       <CallNotesHistory callNotes={lead.callNotes} />
+
+      {/* Email History */}
+      <LeadEmailHistory leadId={lead.id} leadEmail={lead.email} />
 
       {/* Transaction Pipeline — full width below */}
       <div className="space-y-4">

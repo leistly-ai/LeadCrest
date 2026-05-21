@@ -41,19 +41,25 @@ export default function EmailCampaigns() {
           where('agentId', '==', user.uid)
         );
 
-        const unsubEmails = onSnapshot(q, (snapshot) => {
-          const emailsData = snapshot.docs.map((doc) => ({
-            id: doc.id,
-            ...doc.data()
-          } as ScheduledEmail));
+        const unsubEmails = onSnapshot(q,
+          (snapshot) => {
+            const emailsData = snapshot.docs.map((doc) => ({
+              id: doc.id,
+              ...doc.data()
+            } as ScheduledEmail));
 
-          emailsData.sort((a, b) =>
-            new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime()
-          );
+            emailsData.sort((a, b) =>
+              new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime()
+            );
 
-          setEmails(emailsData);
-          setLoading(false);
-        });
+            setEmails(emailsData);
+            setLoading(false);
+          },
+          (error) => {
+            console.error('[EmailCampaigns] Error fetching emails:', error);
+            setLoading(false);
+          }
+        );
 
         return () => unsubEmails();
       } else {
