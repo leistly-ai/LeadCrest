@@ -38,6 +38,7 @@ RUN npm install -g tsx
 
 # Expose port (Cloud Run will inject PORT env var)
 ENV PORT=8080
+ENV NODE_ENV=production
 EXPOSE 8080
 
 # Start the server
