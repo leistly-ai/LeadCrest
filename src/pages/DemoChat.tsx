@@ -84,7 +84,7 @@ export default function DemoChat() {
           setIsTyping(false);
           setMessages(prev => [...prev, {
             id: 'final-thanks',
-            text: "Thank you for your feedback! 🎉\n\nThis demo shows how LeadCrest helps real estate agents qualify leads automatically. Want to see it in action for your business?\n\nSign up for a free trial to start capturing and qualifying your own leads!",
+            text: "Thank you for your feedback! 🎉\n\nThis demo shows how LeadCrest helps real estate agents qualify leads automatically.",
             sender: 'bot'
           }]);
           setIsFinished(true);
@@ -266,20 +266,6 @@ export default function DemoChat() {
             </div>
             <h3 className="font-bold text-zinc-800 text-base">Demo Complete!</h3>
             <p className="text-xs text-zinc-500 leading-relaxed">This is how LeadCrest qualifies leads for real estate agents automatically.</p>
-            <div className="flex gap-3 pt-2">
-              <a
-                href="/signup"
-                className="flex-1 py-3 px-6 bg-[#D4A373] hover:bg-[#c29262] text-white font-bold rounded-xl transition-all text-sm"
-              >
-                Start Free Trial
-              </a>
-              <a
-                href="/"
-                className="flex-1 py-3 px-6 bg-zinc-100 hover:bg-zinc-200 text-zinc-800 font-bold rounded-xl transition-all text-sm"
-              >
-                Back to Home
-              </a>
-            </div>
           </div>
         )}
       </div>
