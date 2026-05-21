@@ -124,24 +124,24 @@ export default function LandingPage() {
                 <Zap className="w-4 h-4" />
                 <span>Next-Gen Lead Intelligence</span>
               </div>
-              <h1 className="text-6xl md:text-8xl font-bold tracking-tight text-midnight leading-[1.1]">
+              <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight text-midnight leading-[1.1]">
                 Qualify Leads <br />
                 <span className="text-honey italic font-serif">While You Sleep</span>
               </h1>
-              <p className="text-xl text-charcoal/70 max-w-xl leading-relaxed">
+              <p className="text-base md:text-lg text-charcoal/70 max-w-xl leading-relaxed">
                 LeadCrest automates the entire real estate lead qualification process. From WhatsApp chat to credit checks and contract generation.
               </p>
               <div className="flex flex-wrap gap-4 pt-4">
                 <Link
                   to="/signup"
-                  className="px-10 py-5 bg-honey hover:bg-[#c29262] text-white font-bold rounded-large transition-all flex items-center gap-3 group shadow-xl shadow-honey/20"
+                  className="px-6 py-3 md:px-8 md:py-4 bg-honey hover:bg-[#c29262] text-white font-bold rounded-large transition-all flex items-center gap-3 group shadow-xl shadow-honey/20 text-sm md:text-base"
                 >
                   Start 7-Day Free Trial
                   <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                 </Link>
                 <Link
                   to="/login"
-                  className="px-10 py-5 bg-white hover:bg-zinc-50 text-midnight font-bold rounded-large border border-zinc-200 transition-all shadow-sm"
+                  className="px-6 py-3 md:px-8 md:py-4 bg-white hover:bg-zinc-50 text-midnight font-bold rounded-large border border-zinc-200 transition-all shadow-sm text-sm md:text-base"
                 >
                   Agent Login
                 </Link>
