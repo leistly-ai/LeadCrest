@@ -1,0 +1,85 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isLeadOwner(leadData) {
+      return isAuthenticated() && request.auth.uid == leadData.agentId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "tfmanavalan@gmail.com" && request.auth.token.email_verified == true) ||
+          (request.auth.token.email == "admin@leistly.com" && request.auth.token.email_verified == true));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    // Agents can only read/write their own profile
+    match /agents/{agentId} {
+      allow read: if isOwner(agentId);
+      // Only allow updating specific fields from the client
+      // googleRefreshToken and googleContacts should only be updated by the server
+      allow update: if isOwner(agentId) && 
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['googleRefreshToken', 'googleContacts']);
+      allow create: if isOwner(agentId);
+    }
+
+    // User configuration, tokens and contacts
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      
+      match /tokens/{tokenId} {
+        // Tokens should only be readable by the owner
+        // They are written by the Blocking Function (Admin SDK)
+        allow read: if isOwner(userId);
+        allow write: if false; // Only Admin SDK (Blocking Function) should write tokens
+      }
+
+      match /contacts/{contactId} {
+        // Contacts are readable and manageable by the owner
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // Leads Security
+    match /leads/{leadId}/prefillCache/{stepId} {
+      allow read: if true; // Read by unauthenticated signing page
+      allow write: if true; // Written by client after FINTRAC submission
+    }
+
+    match /leads/{leadId} {
+      // 1. PUBLIC CREATE: Allow the webhook (or simulator) to create leads
+      allow create: if true; 
+
+      // 2. SECURE READ/UPDATE: Only the assigned agent can see or edit the lead
+      allow read, update, delete: if isLeadOwner(resource.data) || isAdmin();
+    }
+
+    // Payments Security
+    match /payments/{paymentId} {
+      // Allow public read for social proof on landing page and login
+      allow read: if true;
+      // Only admins can create/update/delete payments
+      allow write: if isAdmin();
+    }
+
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
