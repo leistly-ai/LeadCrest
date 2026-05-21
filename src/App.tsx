@@ -20,6 +20,7 @@ import AdminLogin from './pages/AdminLogin';
 import CustomerChat from './pages/CustomerChat';
 import DemoChat from './pages/DemoChat';
 import Contacts from './pages/Contacts';
+import UsageDashboard from './pages/UsageDashboard';
 import Navbar from './components/Navbar';
 import { ModalProvider } from './contexts/ModalContext';
 import GlobalModals from './components/GlobalModals';
@@ -290,6 +291,12 @@ export default function App() {
               <Route path="/contacts" element={
                 <ProtectedRoute user={user} loading={loading}>
                   <Contacts />
+                </ProtectedRoute>
+              } />
+
+              <Route path="/usage" element={
+                <ProtectedRoute user={user} loading={loading}>
+                  <UsageDashboard />
                 </ProtectedRoute>
               } />
 

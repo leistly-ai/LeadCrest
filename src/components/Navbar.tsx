@@ -1,7 +1,7 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { User as FirebaseUser, signOut } from 'firebase/auth';
 import { auth } from '../firebase';
-import { LogOut, LayoutDashboard, ChevronUp, Network, QrCode, User, ShieldCheck, Users } from 'lucide-react';
+import { LogOut, LayoutDashboard, ChevronUp, Network, QrCode, User, ShieldCheck, Users, CreditCard } from 'lucide-react';
 import { useModal } from '../contexts/ModalContext';
 
 export default function Navbar({ user }: { user: FirebaseUser | null }) {
@@ -109,6 +109,12 @@ export default function Navbar({ user }: { user: FirebaseUser | null }) {
                 className={`text-sm font-bold transition-colors flex items-center gap-2 ${location.pathname === '/contacts' ? 'text-honey' : 'text-midnight/70 hover:text-honey'}`}
               >
                 <Users className="w-4 h-4" /> Contacts
+              </Link>
+              <Link
+                to="/usage"
+                className={`text-sm font-bold transition-colors flex items-center gap-2 ${location.pathname === '/usage' ? 'text-honey' : 'text-midnight/70 hover:text-honey'}`}
+              >
+                <CreditCard className="w-4 h-4" /> Usage
               </Link>
               <Link
                 to="/profile"

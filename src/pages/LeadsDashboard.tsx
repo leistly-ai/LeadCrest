@@ -3,7 +3,7 @@ import { collection, query, where, onSnapshot, getDocs, writeBatch } from 'fireb
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { Lead } from '../types';
-import { Users, TrendingUp, Search, Filter, ExternalLink, PieChart as PieChartIcon, BarChart as BarChartIcon, MessageSquare, UserPlus, CheckCircle2, Trash2 } from 'lucide-react';
+import { Users, TrendingUp, Search, Filter, ExternalLink, PieChart as PieChartIcon, BarChart as BarChartIcon, MessageSquare, UserPlus, CheckCircle2, Trash2, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
@@ -296,7 +296,22 @@ export default function LeadsDashboard() {
                     </div>
                     <div>
                       <h3 className="font-semibold text-midnight group-hover:text-honey transition-colors">{lead.name}</h3>
-                      <p className="text-sm text-charcoal/60">{lead.type === 'buy' ? 'Buying' : 'Renting'} · {lead.email}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm text-charcoal/60">{lead.type === 'buy' ? 'Buying' : 'Renting'} · {lead.email}</p>
+                        {lead.verification && (
+                          <div className="flex items-center gap-1">
+                            {lead.verification.creditCheckCompleted && (
+                              <ShieldCheck className="w-3.5 h-3.5 text-sage" title="Credit Verified" />
+                            )}
+                            {lead.verification.employmentVerified && (
+                              <ShieldCheck className="w-3.5 h-3.5 text-honey" title="Employment Verified" />
+                            )}
+                            {lead.verification.identityVerified && (
+                              <ShieldCheck className="w-3.5 h-3.5 text-midnight" title="Identity Verified" />
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
