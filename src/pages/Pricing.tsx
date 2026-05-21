@@ -6,29 +6,13 @@ import { Check, ArrowRight, Shield, Zap, Crown } from 'lucide-react';
 
 const PLANS = [
   {
-    id: 'starter',
-    name: 'Starter',
-    price: 'Free',
-    period: 'forever',
-    description: 'Try LeadCrest with basic lead capture.',
-    features: [
-      'Up to 5 leads per month',
-      'Basic lead scoring (0-100)',
-      'Web-based chat qualification',
-      'Lead dashboard',
-      'Email notifications',
-    ],
-    icon: <Zap className="w-6 h-6 text-honey" />,
-    popular: false,
-    priceDetail: 'No credit card required'
-  },
-  {
     id: 'professional',
     name: 'Professional',
     price: '$149',
     period: 'per month',
     description: 'Pre-qualified, verified leads ready to close.',
     features: [
+      '7-day free trial included',
       'Up to 50 leads per month',
       'Advanced lead scoring + AI insights',
       '10 soft credit checks included',
@@ -48,6 +32,7 @@ const PLANS = [
     period: 'per month',
     description: 'Full-service lead-to-close automation.',
     features: [
+      '7-day free trial included',
       'Unlimited leads',
       'Unlimited credit checks included',
       'Hard credit checks (Equifax/TransUnion)',
@@ -94,7 +79,7 @@ export default function Pricing() {
       <div className="text-center space-y-4">
         <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-midnight">Choose Your Plan</h1>
         <p className="text-lg text-charcoal/60 max-w-2xl mx-auto">
-          Scale your real estate business with AI-powered lead qualification. Start with our 30-day free trial.
+          Scale your real estate business with AI-powered lead qualification. Start with our 7-day free trial.
         </p>
       </div>
 

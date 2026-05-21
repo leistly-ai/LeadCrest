@@ -36,29 +36,16 @@ const conversionData = [
 
 const tiers = [
   {
-    name: 'Starter',
-    price: 'Free',
-    description: 'Try LeadCrest with basic lead capture.',
-    features: [
-      'Up to 5 leads per month',
-      'Basic lead scoring',
-      'Web-based qualification',
-      'Lead dashboard',
-      'No credit card required',
-    ],
-    highlight: false,
-  },
-  {
     name: 'Professional',
     price: '$149',
     description: 'Pre-qualified, verified leads ready to close.',
     features: [
-      'Up to 50 leads per month',
+      '7-day free trial',
+      'Up to 50 leads/month',
       'Advanced AI scoring',
       '10 credit checks included',
       'Employment verification',
       'Document automation',
-      '$2/additional check',
     ],
     highlight: true,
   },
@@ -67,12 +54,12 @@ const tiers = [
     price: '$349',
     description: 'Full-service lead-to-close automation.',
     features: [
+      '7-day free trial',
       'Unlimited leads',
       'Unlimited credit checks',
       'Multi-agent teams',
       'White-label branding',
       'API access',
-      'Dedicated support',
     ],
     highlight: false,
   },
@@ -149,7 +136,7 @@ export default function LandingPage() {
                   to="/signup"
                   className="px-10 py-5 bg-honey hover:bg-[#c29262] text-white font-bold rounded-large transition-all flex items-center gap-3 group shadow-xl shadow-honey/20"
                 >
-                  Start 30-Day Free Trial
+                  Start 7-Day Free Trial
                   <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                 </Link>
                 <Link

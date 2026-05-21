@@ -1,4 +1,4 @@
-export type SubscriptionTier = 'starter' | 'professional' | 'enterprise';
+export type SubscriptionTier = 'professional' | 'enterprise';
 
 export interface Agent {
   uid: string;
