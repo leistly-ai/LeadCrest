@@ -8,7 +8,7 @@ import { collection, query, orderBy, limit, onSnapshot } from 'firebase/firestor
 import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from '../utils/firestore-errors';
 import QRCode from 'qrcode';
-import { GLOBAL_WHATSAPP_NUMBER, WHATSAPP_LINK_BASE } from '../constants';
+// Constants removed - using web-only approach
 
 interface Payment {
   id: string;

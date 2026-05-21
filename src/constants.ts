@@ -1,3 +1,2 @@
-export const GLOBAL_SMS_NUMBER = '+12897994432';
-export const GLOBAL_WHATSAPP_NUMBER = '+15559116905';
-export const WHATSAPP_LINK_BASE = 'https://wa.me/15559116905';
+// Web-only approach - no SMS/WhatsApp needed
+// All lead qualification happens through web-based chat interfaces

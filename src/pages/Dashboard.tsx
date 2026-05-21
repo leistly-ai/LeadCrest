@@ -9,7 +9,7 @@ import { QrCode, Clock, Copy, CheckCircle2, MessageSquare, Share2, AlertTriangle
 import QRCode from 'qrcode';
 import { handleFirestoreError, OperationType } from '../utils/firestore-errors';
 
-import { GLOBAL_WHATSAPP_NUMBER, WHATSAPP_LINK_BASE } from '../constants';
+// Web-only approach - no WhatsApp constants needed
 
 interface Payment {
   id: string;
@@ -79,9 +79,8 @@ export default function Dashboard() {
     }
 
     const generateQR = async () => {
-      const agentRef = agent?.name || userId;
-      const message = `Hi, I'm interested in a property! [Ref:${agentRef}]`;
-      const chatUrl = `${WHATSAPP_LINK_BASE}?text=${encodeURIComponent(message)}`;
+      // Generate web-based chat URL instead of WhatsApp
+      const chatUrl = `${window.location.origin}/chat/${userId}`;
 
       try {
         const url = await QRCode.toDataURL(chatUrl, {
@@ -103,10 +102,8 @@ export default function Dashboard() {
 
   const handleCopy = () => {
     if (!userId) return;
-    const agentRef = agent?.name || userId;
-    const message = `Hi, I'm interested in a property! [Ref:${agentRef}]`;
-    const chatUrl = `${WHATSAPP_LINK_BASE}?text=${encodeURIComponent(message)}`;
-    
+    const chatUrl = `${window.location.origin}/chat/${userId}`;
+
     navigator.clipboard.writeText(chatUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -165,12 +162,12 @@ export default function Dashboard() {
             <div className="p-6 rounded-3xl bg-white/5 border border-white/10 space-y-6">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-[#25D366]/20 flex items-center justify-center">
-                    <Share2 className="w-5 h-5 text-[#25D366]" />
+                  <div className="w-10 h-10 rounded-xl bg-honey/20 flex items-center justify-center">
+                    <Share2 className="w-5 h-5 text-honey" />
                   </div>
                   <div>
-                    <p className="text-sm font-bold">WhatsApp Direct Link</p>
-                    <p className="text-[10px] text-white/40 uppercase tracking-widest">Global Number: {GLOBAL_WHATSAPP_NUMBER}</p>
+                    <p className="text-sm font-bold">Your Lead Capture Link</p>
+                    <p className="text-[10px] text-white/40 uppercase tracking-widest">Web-Based Chat Experience</p>
                   </div>
                 </div>
                 <button 
@@ -274,10 +271,10 @@ export default function Dashboard() {
                   title: 'Digital Ads', 
                   desc: 'Use the link in your Instagram, Facebook, or Google property ads.' 
                 },
-                { 
-                  step: '03', 
-                  title: 'Auto-Capture', 
-                  desc: `Leads scan and message our global AI number (${GLOBAL_WHATSAPP_NUMBER}).` 
+                {
+                  step: '03',
+                  title: 'Auto-Capture',
+                  desc: 'Leads scan your QR code and start the web-based qualification chat.'
                 },
                 { 
                   step: '04', 

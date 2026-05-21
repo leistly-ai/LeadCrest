@@ -356,9 +356,7 @@ async function generateWithFallback(aiInstance: GoogleGenAI, params: any) {
   throw lastError;
 }
 
-// In-memory session store
-const sessions = new Map<string, any>();
-const lastRequests: any[] = [];
+// Session store removed - using web-based stateful chat components instead
 
 async function startServer() {
   const app = express();
@@ -463,114 +461,8 @@ async function startServer() {
     }
   });
 
-  // 3. WEBHOOK HANDLER DEFINITION
-  const webhookHandler = async (req: any, res: any) => {
-    const method = req.method;
-    const url = req.originalUrl || req.url;
-    console.log(`[Webhook Execution] ${method} ${url}`);
-
-    res.type('text/xml');
-
-    const From = req.query.From || req.body?.From;
-    const Body = req.query.Body || req.body?.Body;
-
-    if (method === 'GET' && !From) {
-      return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response><Message>Service Online</Message></Response>');
-    }
-
-    try {
-      if (!From || !Body) {
-        console.log('[Webhook] Missing From or Body', { From, Body });
-        return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response><Message>Ready</Message></Response>');
-      }
-
-      // Lazy load dependencies to keep response fast
-      const { db } = await import('./src/firebase');
-      const { getDocs, collection, addDoc, query, where } = await import('firebase/firestore');
-
-      const now = Date.now();
-      let session = sessions.get(From);
-
-      if (!session) {
-        let agentId = null;
-        let agentName = 'Real Estate Agent';
-
-        const refMatch = Body.match(/\[Ref:(.*?)\]/);
-        if (refMatch) {
-          const refValue = refMatch[1].trim();
-          const agentsRef = collection(db, 'agents');
-          const qName = query(agentsRef, where('name', '==', refValue));
-          const qId = query(agentsRef, where('uid', '==', refValue));
-          const [nameSnap, idSnap] = await Promise.all([getDocs(qName), getDocs(qId)]);
-          const agentDoc = nameSnap.docs[0] || idSnap.docs[0];
-          if (agentDoc) {
-            agentId = agentDoc.id;
-            agentName = agentDoc.data().name;
-          }
-        }
-
-        if (!agentId) {
-          const allAgents = await getDocs(collection(db, 'agents'));
-          if (allAgents.size === 1) {
-            agentId = allAgents.docs[0].id;
-            agentName = allAgents.docs[0].data().name;
-          }
-        }
-
-        const systemPrompt = `You are a professional real estate assistant for ${agentName}. Qualify this lead by asking: Name, Email, Phone, Address, Buy/Rent, Employer, Salary. Ask ONE question at a time. Output JSON [QUALIFIED: {...}] at the end.`;
-
-        session = {
-          agentId,
-          agentName,
-          history: [{ role: 'system', parts: [{ text: systemPrompt }] }],
-          lastActive: now
-        };
-        sessions.set(From, session);
-      }
-
-      session.lastActive = now;
-      session.history.push({ role: 'user', parts: [{ text: Body }] });
-
-      const ai = getAI();
-      const result = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: session.history,
-      });
-
-      let aiText = result.text || "I'm sorry, I'm having trouble right now.";
-
-      if (aiText.includes('[QUALIFIED:')) {
-        try {
-          const match = aiText.match(/\[QUALIFIED:\s*({.*?})\]/s);
-          if (match) {
-            const leadData = JSON.parse(match[1]);
-            await addDoc(collection(db, 'leads'), {
-              ...leadData,
-              agentId: session.agentId,
-              phone: From.replace('whatsapp:', ''),
-              status: 'warm',
-              source: 'whatsapp',
-              createdAt: new Date().toISOString()
-            });
-            aiText = aiText.replace(/\[QUALIFIED:.*?\]/gs, '').trim() + "\n\nThank you! I've shared your profile with the agent.";
-          }
-        } catch (e) {}
-      }
-
-      const cleanText = aiText.replace(/\[QUALIFIED:.*?\]/gs, '').trim();
-      session.history.push({ role: 'model', parts: [{ text: cleanText }] });
-
-      res.send(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${cleanText}</Message></Response>`);
-
-    } catch (error: any) {
-      console.error('[Webhook Error]:', error);
-      res.send('<?xml version="1.0" encoding="UTF-8"?><Response><Message>Error</Message></Response>');
-    }
-  };
-
-  // 4. WEBHOOK ROUTES
-  app.all('/whatsapp-webhook', webhookHandler);
-  app.all('/twilio-webhook', webhookHandler);
+  // SMS/WhatsApp webhooks removed - using web-only approach for lead qualification
+  // All lead capture happens through web-based chat interface (/chat/:agentId and /demo-chat)
 
   // 5. GLOBAL CORS
   app.use((req, res, next) => {
@@ -1371,15 +1263,7 @@ Rules:
     res.json({ status: 'ok', method: req.method, url: req.url });
   });
 
-  // 4. WEBHOOK ROOT SUPPORT
-  app.all('/', (req, res, next) => {
-    const ua = req.headers['user-agent'] || '';
-    const isTwilio = ua.includes('Twilio') || req.query.From || req.body?.From;
-    if (isTwilio) {
-      return webhookHandler(req, res);
-    }
-    next();
-  });
+  // Root handler - no special Twilio handling needed (web-only approach)
 
   // 5. Basic Middlewares & CORS (Already handled at top)
   app.get('/health', (req, res) => {
